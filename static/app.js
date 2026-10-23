@@ -655,7 +655,7 @@ async function loadServer(withChecks) {
   $('#r-count').innerHTML = seg7(`${up}-${ctrs.length}`, 3);
   $$('#r-cells i').forEach((e, i) => { e.className = (up && i < Math.round(24 * up / Math.max(1, ctrs.length))) ? 'on' : (JOB && i === 0 ? 'lead' : ''); });
   $('#srv-state').innerHTML = `<i class="dot ${up ? 'on' : r.docker.usable ? '' : 'err'}"></i>${r.docker.usable ? `Docker ${esc(r.docker.version)}` : 'Docker unavailable'}`;
-  $$('.power button').forEach(b => b.disabled = !r.docker.usable || !!JOB);
+  $$('#svc-power button').forEach(b => b.disabled = !r.docker.usable || !!JOB);
   $('#ctrs').innerHTML = !r.docker.usable ? `<div class="banner sub">${esc(r.docker.error)}</div>` : ctrs.length ? ctrs.map(c => `<div class="ctr-row"><span class="sled ${c.state === 'running' ? 'ready' : c.state === 'restarting' ? 'busy' : ''}"></span>
       <div><b>${esc(c.service)}</b> <span class="sub">${esc(c.image)}</span><div class="sub">${esc(c.status)}</div></div><span class="k">${esc(c.state)}</span></div>`).join('') : '<div class="empty">No containers yet. Press Start.</div>';
   $('#autostart').checked = r.autostart; $('#autostart').disabled = !isAdmin();
@@ -665,7 +665,7 @@ async function loadServer(withChecks) {
   if (running && !JOB) followJob(running.id, running.action);
 }
 $('#pf-run').onclick = () => loadServer(true);
-$('.power').addEventListener('click', e => { const b = e.target.closest('[data-act]'); if (b) serverAction(b.dataset.act); });
+$('#svc-power').addEventListener('click', e => { const b = e.target.closest('[data-act]'); if (b) serverAction(b.dataset.act); });
 async function serverAction(act, force) {
   if (act === 'stop' && !await confirmBox('Stop the cache?', 'Players downloading right now will fall back to the internet (or fail if their DNS only points here).', 'Stop')) return;
   try {
@@ -682,12 +682,17 @@ async function followJob(id, act, outSel = '#job-out', titleSel = '#job-title', 
   const out = $(outSel); out.innerHTML = ''; out.hidden = false;
   const title = $(titleSel) || { set textContent(v) {} };
   title.textContent = act + ' · running';
-  let since = 0;
+  let since = 0, lastNew = Date.now();
+  const t0 = Date.now(), beat = document.createElement('div');
+  beat.className = 'note';
   while (true) {
     let j;
     try { j = await api('GET', `/api/server/job/${id}?since=${since}`); } catch (e) { break; }
-    if (j.out) { out.insertAdjacentHTML('beforeend', j.out.split('\n').filter(Boolean).map(l => `<div class="${lineClass(l)}">${esc(l)}</div>`).join('')); out.scrollTop = 1e9; }
+    if (j.out) { beat.remove(); out.insertAdjacentHTML('beforeend', j.out.split('\n').filter(Boolean).map(l => `<div class="${lineClass(l)}">${esc(l)}</div>`).join('')); out.scrollTop = 1e9; lastNew = Date.now(); }
     since = j.lines;
+    // Some steps (formatting, removing a volume) print nothing for a while: show that it's still alive.
+    if (!j.done && Date.now() - lastNew > 4000) { beat.textContent = `still working… ${Math.round((Date.now() - t0) / 1000)} s (no new output for ${Math.round((Date.now() - lastNew) / 1000)} s; some disk steps take a few minutes)`; out.appendChild(beat); out.scrollTop = 1e9; }
+    if (j.done) beat.remove();
     if (j.done) { title.textContent = `${act} · ${j.code === 0 ? 'done' : 'failed (exit ' + j.code + ')'}`; toast(`${act}: ${j.code === 0 ? 'done' : 'failed'}`, j.code === 0 ? 'good' : 'bad'); break; }
     await new Promise(r => setTimeout(r, 700));
   }

@@ -536,6 +536,8 @@ def r_storage_folder(h, body):
 def r_gui_restart(h, body):
     if not os.environ.get("INVOCATION_ID"):
         raise HttpError(409, "The GUI isn't running as the lancache-gui service, so nothing would start it again. Run sudo ./webgui/install.sh.")
+    if docker.busy() or (prefill.current() and prefill.current().ended is None):
+        raise HttpError(409, "A job is still running (disk change, server action or preload). Restarting the GUI now would kill it. Wait until it finishes.")
     audit(h.sess["user"], "gui-restart")
     # Answer first, then exit; systemd (Restart=always) starts it again.
     threading.Timer(0.8, lambda: os._exit(0)).start()
@@ -544,6 +546,8 @@ def r_gui_restart(h, body):
 
 @route("POST", "/api/system/reboot", role="admin")
 def r_reboot(h, body):
+    if docker.busy():
+        raise HttpError(409, "A disk change or server action is still running. Wait until it finishes before rebooting.")
     try:
         out = storage.reboot(h.sess["user"])
     except ValueError as e:

@@ -141,6 +141,10 @@ def job(jid, since=0):
     return {k: v for k, v in j.items() if k != "out"} | {"out": "".join(j["out"][since:]), "lines": len(j["out"])}
 
 
+def busy():
+    return _busy.locked()
+
+
 def recent_jobs():
     with _jobs_lock:
         return [{k: v for k, v in j.items() if k != "out"} for j in sorted(_jobs.values(), key=lambda j: -j["started"])]
