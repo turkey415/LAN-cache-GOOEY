@@ -207,7 +207,16 @@ def r_client(h, q, ip):
 def r_games(h, q):
     cs = system.SAMPLER.cache_size
     pst = prefill.status()
-    return {"games": logs.games_summary(), "disk": cs, "fs": config.fs_usage(config.cache_root()),
+    gl = logs.games_summary()
+    # Full size per Steam app: exact from SteamPrefill for preloaded games, else estimated from Steam's depot list.
+    sizes = {}
+    for g in gl:
+        if g.get("appid"):
+            exact = pst["sizes"].get(str(g["appid"]))
+            est = None if exact else games.full_size(g["appid"])
+            if exact or est:
+                sizes[str(g["appid"])] = {"bytes": exact or est, "exact": bool(exact)}
+    return {"games": gl, "sizes": sizes, "disk": cs, "fs": config.fs_usage(config.cache_root()),
             "limit": config.env_dict().get("CACHE_DISK_SIZE"),
             "preloaded": {"builds": pst["builds"], "latest": {k: v.get("buildid") for k, v in pst["latest"].items()}, "sizes": pst["sizes"],
                           "apps": pst["apps"], "last_run": pst["last_run"]}}

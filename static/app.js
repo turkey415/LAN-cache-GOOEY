@@ -471,7 +471,7 @@ const G = {
   count: mkCount('#n-gcount', 'Games'), stored: mkCount('#n-stored', 'Fetched from internet'),
   served: mkCount('#n-served', 'Served from cache'), saved: mkCount('#n-saved', 'Hit ratio'),
 };
-let GAMES = [], PRE = { builds: {}, latest: {}, sizes: {} };
+let GAMES = [], PRE = { builds: {}, latest: {}, sizes: {} }, SIZES = {};
 // How much of a game is in the cache, against its full download size from SteamPrefill (when known).
 // Machines that downloaded this game mostly from the cache (blue) or mostly from the internet (purple).
 function usersHtml(g) {
@@ -480,13 +480,14 @@ function usersHtml(g) {
   return `<div class="k cap"><span class="bl">${c} from cache</span><span class="pu">${i} from internet</span></div>
     <div class="split users" title="${c} machine(s) got it mostly from the cache, ${i} mostly from the internet"><b style="width:${100 * c / t}%"></b><s style="width:${100 * i / t}%"></s></div>`;
 }
+// How much of a game is in the cache, against its full download size: exact from SteamPrefill for preloaded
+// games, estimated (≈) from Steam's depot list for other Steam games, unknown for everything else.
 function completeHtml(g) {
-  const full = g.appid && PRE.sizes && PRE.sizes[g.appid];
-  if (!full) return null;
-  const have = Math.min(g.miss, full), frac = have / full, done = frac >= 0.98;
-  return `<div class="k" style="display:flex;justify-content:space-between;letter-spacing:.04em;text-transform:none;margin-bottom:4px">
-      <span>${done ? '✓ complete' : Math.floor(frac * 100) + '% cached'}</span><span>${fmtBytes(have)} of ${fmtBytes(full)}</span></div>
-    <div class="split" title="Cached ${fmtBytes(have)} of the full ${fmtBytes(full)} download"><b style="width:${(100 * frac).toFixed(1)}%"></b></div>`;
+  const sz = g.appid && SIZES[g.appid];
+  if (!sz) return `<div class="k cap"><span>${fmtBytes(g.miss)} cached</span><span>full size unknown</span></div><div class="split"></div>`;
+  const full = sz.bytes, have = Math.min(g.miss, full), frac = have / full, done = frac >= 0.98, ap = sz.exact ? '' : '≈ ';
+  return `<div class="k cap"><span>${done ? '✓ complete' : Math.floor(frac * 100) + '% cached'}</span><span>${fmtBytes(have)} of ${ap}${fmtBytes(full)}</span></div>
+    <div class="split" title="Cached ${fmtBytes(have)} of the ${sz.exact ? '' : 'estimated '}full ${fmtBytes(full)} Windows download"><b style="width:${(100 * frac).toFixed(1)}%"></b></div>`;
 }
 // Badge for games the Preload tab keeps current: preloaded and up to date, or a newer build is out.
 function preBadge(appid) {
@@ -498,7 +499,7 @@ function preBadge(appid) {
 const splitCaption = (hit, miss) => { const t = hit + miss; return t ? `<div class="k" style="display:flex;justify-content:space-between;letter-spacing:.04em;text-transform:none;margin-bottom:4px"><span>${Math.round(100 * hit / t)}% from cache</span><span>${Math.round(100 * miss / t)}% from internet</span></div>` : ''; };
 async function loadGames() {
   const r = await api('GET', '/api/games');
-  GAMES = r.games; PRE = r.preloaded || PRE;
+  GAMES = r.games; PRE = r.preloaded || PRE; SIZES = r.sizes || {};
   const lim = sizeBytes(r.limit), used = r.disk.bytes;
   G.cache({ f: lim && used != null ? used / lim : 0, text: used != null ? splitBytes(used)[0] : '--', unit: used != null ? splitBytes(used)[1] : '', scale: r.limit ? 'limit ' + r.limit : '', off: used == null });
   const fu = r.fs.total ? (r.fs.total - r.fs.free) / r.fs.total : 0;
@@ -523,7 +524,7 @@ function renderGames() {
         <div class="figs"><div class="fig"><span class="k">In cache</span>${seg7(sb[0], 4)}<span class="un">${sb[1]}</span></div>
           <div class="fig"><span class="k">Served</span>${seg7(hb[0], 4)}<span class="un">${hb[1]}</span></div>
           <div class="fig"><span class="k">Clients</span>${seg7(String(g.clients), 4)}<span class="un">machines</span></div></div>
-        <div>${completeHtml(g) || splitCaption(g.hit, g.miss) + splitBar(g.hit, g.miss)}</div>
+        <div>${completeHtml(g)}</div>
         <div>${usersHtml(g)}</div>
         <span class="sub">Last download ${fmtAgo(g.last)}</span></div></div>`;
   }).join('') : '<div class="empty">Nothing in the cache yet. Games show up here after the first machine downloads them through the cache.</div>';
@@ -545,6 +546,7 @@ async function openGame(gid) {
         <div class="fig"><span class="k">Served</span>${seg7(splitBytes(hit)[0], 4)}<span class="un">${splitBytes(hit)[1]}</span></div>
         <div class="fig"><span class="k">Hit ratio</span>${seg7(String(pct(hit, hit + miss) ?? '-'), 3)}<span class="un">%</span></div>
         <div class="fig"><span class="k">Machines</span>${seg7(String(g.clients.length), 3)}<span class="un">clients</span></div></div></div></div>
+    <div style="max-width:520px;margin-top:16px"><div class="k" style="margin-bottom:6px">All traffic for this game</div>${splitCaption(hit, miss)}${splitBar(hit, miss)}</div>
     <h2 style="margin-top:22px">Download history by machine</h2>
     <div class="tbl"><table><tr><th>Machine</th><th class="l">IP</th><th>From cache</th><th>From internet</th><th class="l">Source</th><th>Started</th><th>Last activity</th></tr>
     ${g.clients.map(c => `<tr><td>${esc(c.label || c.hostname || '—')}</td><td class="l mono">${esc(c.ip)}</td><td>${fmtBytes(c.hit)}</td><td>${fmtBytes(c.miss)}</td>

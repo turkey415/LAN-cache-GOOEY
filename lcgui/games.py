@@ -37,6 +37,7 @@ _depots = {int(k): v for k, v in load_json(data_path("depots.json"), {}).items()
 _apps = {int(k): v for k, v in load_json(data_path("apps.json"), {}).items()}       # app id -> name
 _tried = {}
 _q = queue.Queue()
+_sizes = load_json(data_path("app_sizes.json"), {})   # app id -> {"bytes": full Windows download, "t": when checked}
 
 
 def identify(svc, host, path):
@@ -79,6 +80,33 @@ def app_name(appid):
         _tried[("app", appid)] = time.time()
         _q.put(("app", appid))
     return n
+
+
+def _windows_download_size(info):
+    """Full Windows download of an app from Steam's depot list: depots for Windows (or any OS), no language
+    packs, no optional DLC, not borrowed from another app (shared redistributables). Matches SteamPrefill."""
+    total = 0
+    for k, v in (info.get("depots") or {}).items():
+        if not k.isdigit() or not isinstance(v, dict) or v.get("depotfromapp") or v.get("dlcappid"):
+            continue
+        cfg = v.get("config") or {}
+        if cfg.get("optionaldlc") or cfg.get("language") or (cfg.get("oslist") and "windows" not in cfg["oslist"]):
+            continue
+        man = (v.get("manifests") or {}).get("public") or {}
+        try:
+            total += int(man.get("download") or 0)
+        except (TypeError, ValueError):
+            pass
+    return total or None
+
+
+def full_size(appid):
+    """Estimated full Windows download size of a Steam app (bytes), or None while unknown. Refreshed daily."""
+    v = _sizes.get(str(appid))
+    if (not v or time.time() - v["t"] > 86400) and _tried.get(("size", appid), 0) < time.time() - 3600:
+        _tried[("size", appid)] = time.time()
+        _q.put(("size", appid))
+    return v["bytes"] if v else None
 
 
 def describe(key):
@@ -142,6 +170,14 @@ def _worker():
     while True:
         item = _q.get()
         try:
+            if isinstance(item, tuple) and item[0] == "size":
+                info = _app_info(item[1])
+                size = info and _windows_download_size(info)
+                if size:
+                    with _lock:
+                        _sizes[str(item[1])] = {"bytes": size, "t": time.time()}
+                        save_json(data_path("app_sizes.json"), _sizes)
+                continue
             if isinstance(item, tuple):
                 info = _app_info(item[1])
                 name = info and (info.get("common") or {}).get("name")
