@@ -737,16 +737,16 @@ async function loadPreload(first) {
       <span class="src ${st}"><i></i>${txt}</span></div>`;
   }).join('');
   const re = $('#pf-reactor');
-  re.className = 'reactor ' + (!r.installed ? 'locked' : running ? 'firing' : r.update_available.length ? 'armed' : r.last_run && r.last_run.ok ? 'ready' : '');
-  $('#pf-rstate').textContent = !r.installed ? 'SteamPrefill not downloaded' : running ? (j.prompt ? 'waiting for you: see below' : 'preloading…') : r.update_available.length ? 'new build available' : r.last_run ? (r.last_run.ok ? 'cache up to date' : 'last preload failed') : 'ready';
+  re.className = 'reactor ' + (running ? 'firing' : r.update_available.length ? 'armed' : r.last_run && r.last_run.ok ? 'ready' : '');
+  $('#pf-rstate').textContent = running ? (j.prompt ? 'waiting for you: see below' : 'preloading…') : r.update_available.length ? 'new build available' : r.last_run ? (r.last_run.ok ? 'cache up to date' : 'last preload failed') : 'ready';
   const since = running ? Date.now() / 1000 - j.started : r.last_run ? Date.now() / 1000 - r.last_run.t : null;
   $('#pf-clock').innerHTML = since == null ? '' : seg7(running ? String(Math.floor(since / 60)).padStart(2, '0') + ':' + String(Math.floor(since % 60)).padStart(2, '0') : '--:--', 4);
   const cells = $$('#pf-cells i'), lead = running ? Math.floor(Date.now() / 250) % 24 : -1;
   cells.forEach((e, i) => e.className = running ? (i === lead ? 'lead' : i < lead ? 'on' : '') : (r.installed && r.last_run && r.last_run.ok && !r.update_available.length ? 'on' : ''));
-  $('#pf-go').disabled = !r.installed || running; $('#pf-force').disabled = !r.installed || running; $('#pf-stop').disabled = !running;
+  $('#pf-go').disabled = running; $('#pf-force').disabled = running; $('#pf-stop').disabled = !running;
   $('#pf-state').innerHTML = `<i class="dot ${running ? 'live' : r.last_run && !r.last_run.ok ? 'err' : r.last_run ? 'on' : ''}"></i>${running ? 'running' : r.last_run ? 'last run ' + fmtAgo(r.last_run.t) : 'never run'}`;
   $('#pf-setup').innerHTML = [
-    [r.installed, 'SteamPrefill downloaded', r.installed ? `Version ${r.version || '?'}` : 'Press Download SteamPrefill (needs internet once)'],
+    [r.installed ? true : null, 'SteamPrefill downloaded', r.installed ? `Version ${r.version || '?'}` : 'Not yet. Preload CS2 downloads it automatically the first time (needs internet).'],
     [r.logged_in ? true : null, 'Steam account', r.logged_in ? 'Logged in (saved by SteamPrefill)' : 'Not logged in yet. The first preload asks for it.'],
     [cacheUp ? true : false, 'Cache running', cacheUp ? 'Preloads go into the cache' : 'Start the cache on the Service tab first'],
   ].map(([ok, t, d]) => `<div class="check"><span class="sled ${ok === true ? 'ready' : ok === false ? 'bad' : 'busy'}"></span><div><b>${t}</b><div class="sub">${esc(d)}</div></div></div>`).join('');
@@ -780,6 +780,7 @@ async function loadPreload(first) {
 }
 async function pfStart(force) {
   if (force && !await confirmBox('Force a full download?', 'Downloads every file of the game again even if the cache has it. Only needed if the cache was wiped.', 'Download everything')) return;
+  if (!PF.st || !PF.st.installed) { toast('Downloading SteamPrefill first…'); $('#pf-go').disabled = true; }
   try { await api('POST', '/api/prefill/start', { force }); PF.n = 0; await loadPreload(true); }
   catch (e) {
     if (e.status === 409 && /isn't running/.test(e.message) && await confirmBox('Cache is not running', esc(e.message), 'Run anyway')) {

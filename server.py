@@ -579,6 +579,12 @@ def r_prefill_start(h, body):
     running = {c["service"] for c in docker.status() if c["state"] == "running"} if docker.installed() else set()
     if "monolithic" not in running and not body.get("anyway"):
         raise HttpError(409, "The cache container isn't running, so a preload would download from the internet into nothing. Start the cache first.")
+    if not prefill.installed():
+        # First use: fetch SteamPrefill now instead of making people find the Download button.
+        try:
+            prefill.install(h.sess["user"])
+        except Exception as e:  # noqa: BLE001
+            raise HttpError(502, f"Could not download SteamPrefill (needs internet once): {e}")
     try:
         return prefill.start(h.sess["user"], force=bool(body.get("force")))
     except RuntimeError as e:
