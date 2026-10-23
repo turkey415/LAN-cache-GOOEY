@@ -27,6 +27,7 @@ TOOL_DIR = os.path.dirname(data_path("steamprefill", "x"))
 BIN = os.path.join(TOOL_DIR, "SteamPrefill")
 CONFIG_DIR = os.path.join(TOOL_DIR, "Config")
 STATE_FILE = data_path("prefill_state.json")
+LOG_FILE = data_path("prefill.log")      # full output of the latest preload run, for troubleshooting
 RELEASES = "https://api.github.com/repos/tpill90/steam-lancache-prefill/releases/latest"
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(\x07|\x1b\\)|\x1b[()][A-Z0-9]|[\x00-\x08\x0b\x0c\x0e-\x1f]")
 DEFAULT_APPS = [730]   # Counter-Strike 2
@@ -141,6 +142,8 @@ class Job:
         self.lines, self.partial, self.prompt, self.secret = [], "", None, False
         self.builds_at_start = {a: v.get("buildid") for a, v in _latest.items()}
         self.lock = threading.Lock()
+        self.log = open(LOG_FILE, "w", encoding="utf-8", buffering=1)
+        self.log.write(f"# {time.strftime('%Y-%m-%d %H:%M:%S')} SteamPrefill {' '.join(args)} (by {user})\n")
         pid, fd = pty.fork()
         if pid == 0:   # child
             os.chdir(TOOL_DIR)
@@ -160,9 +163,16 @@ class Job:
                 ln = ln.split("\r")[-1].rstrip()   # progress bars redraw with \r: keep the final state
                 if ln.strip():
                     self.lines.append(ln)
+                    self._log(ln)
             self.partial = parts[-1]
             if len(self.lines) > 5000:
                 del self.lines[:1000]
+
+    def _log(self, line):
+        try:
+            self.log.write(time.strftime("%H:%M:%S ") + line + "\n")
+        except (OSError, ValueError):
+            pass
 
     def _read(self):
         last = time.time()
@@ -186,6 +196,7 @@ class Job:
                     if p.endswith(":") and self.prompt is None:
                         self.prompt = p
                         self.secret = "password" in p.lower()
+                        self._log("[waiting for input] " + p)
                     stop_now = self.prompt is not None and self.auto
                     if stop_now:
                         self.lines.append("Automatic preload needs a Steam login. Run Preload by hand once to log in.")
@@ -199,6 +210,8 @@ class Job:
             self.partial, self.prompt = "", None
         self.ended = time.time()
         os.close(self.fd)
+        self._log(f"[exit {self.code}]")
+        self.log.close()
         tail = " ".join(self.lines[-20:]).lower()
         ok = self.code == 0 and not any(w in tail for w in ("unable to detect lancache", "exception", "error!", "failed"))
         st = _state()
@@ -216,6 +229,7 @@ class Job:
             raise RuntimeError("Preload is not running")
         with self.lock:
             self.lines.append((self.prompt or "") + " " + ("•" * 8 if self.secret else text))
+            self._log("[answered] " + (self.prompt or "") + " " + ("(hidden)" if self.secret else text))
             self.partial, self.prompt = "", None
         os.write(self.fd, text.encode() + b"\r")
 
@@ -232,9 +246,19 @@ class Job:
                 pass
 
 
+def _phone_wait(j):
+    """True while Steam waits for the sign-in to be approved in the Steam mobile app."""
+    for ln in reversed(j.lines[-12:]):
+        if "Use the Steam Mobile App to confirm" in ln:
+            return True
+        if any(w in ln.lower() for w in ("logged in", "detected lancache", "downloading", "up to date", "error", "failed")):
+            return False
+    return False
+
+
 def job_info(j, since=0):
     with j.lock:
-        return {"running": j.ended is None, "started": j.started, "ended": j.ended, "code": j.code, "auto": j.auto,
+        return {"phone": j.ended is None and _phone_wait(j),"running": j.ended is None, "started": j.started, "ended": j.ended, "code": j.code, "auto": j.auto,
                 "force": "--force" in j.args, "lines": j.lines[since:], "n": len(j.lines),
                 "partial": j.partial.split("\r")[-1][-300:], "prompt": j.prompt, "secret": j.secret}
 

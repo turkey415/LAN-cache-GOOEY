@@ -738,7 +738,7 @@ async function loadPreload(first) {
   }).join('');
   const re = $('#pf-reactor');
   re.className = 'reactor ' + (running ? 'firing' : r.update_available.length ? 'armed' : r.last_run && r.last_run.ok ? 'ready' : '');
-  $('#pf-rstate').textContent = running ? (j.prompt ? 'waiting for you: see below' : 'preloading…') : r.update_available.length ? 'new build available' : r.last_run ? (r.last_run.ok ? 'cache up to date' : 'last preload failed') : 'ready';
+  $('#pf-rstate').textContent = running ? (j.phone ? 'approve the sign-in on your phone' : j.prompt ? 'waiting for you: see below' : 'preloading…') : r.update_available.length ? 'new build available' : r.last_run ? (r.last_run.ok ? 'cache up to date' : 'last preload failed') : 'ready';
   const since = running ? Date.now() / 1000 - j.started : r.last_run ? Date.now() / 1000 - r.last_run.t : null;
   $('#pf-clock').innerHTML = since == null ? '' : seg7(running ? String(Math.floor(since / 60)).padStart(2, '0') + ':' + String(Math.floor(since % 60)).padStart(2, '0') : '--:--', 4);
   const cells = $$('#pf-cells i'), lead = running ? Math.floor(Date.now() / 250) % 24 : -1;
@@ -767,6 +767,7 @@ async function loadPreload(first) {
     out.appendChild(live); live.textContent = running ? j.partial : '';
     out.scrollTop = 1e9;
     $('#pf-jobline').textContent = `${j.force ? 'forced · ' : ''}${j.auto ? 'automatic · ' : ''}${running ? 'running' : 'exit ' + j.code}`;
+    $('#pf-phone').hidden = !(running && j.phone);
     const pr = $('#pf-prompt');
     if (j.prompt && isAdmin()) {
       if (pr.hidden || $('#pf-prompt-text').textContent !== j.prompt) {
