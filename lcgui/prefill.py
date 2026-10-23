@@ -123,6 +123,42 @@ def check_latest():
     return out
 
 
+BIN_UNITS = {"B": 1, "KiB": 2 ** 10, "MiB": 2 ** 20, "GiB": 2 ** 30, "TiB": 2 ** 40, "KB": 1e3, "MB": 1e6, "GB": 1e9, "TB": 1e12}
+
+
+def refresh_sizes():
+    """Ask SteamPrefill for the full download size of each selected game ('select-apps status'), so the
+    Cache Browser can show how complete a game is. Uses the saved Steam login; skipped while a preload runs."""
+    if not (installed() and logged_in()) or (_job and _job.ended is None):
+        return None
+    write_selection()
+    try:
+        out = subprocess.run([BIN, "select-apps", "status", "--no-ansi"], cwd=TOOL_DIR, capture_output=True, text=True,
+                             timeout=180, env=dict(os.environ, TERM="dumb", COLUMNS="140")).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    names = {}
+    for a in apps():
+        n = (_latest.get(a) or {}).get("name")
+        if not n:
+            from . import games
+            n = games.app_name(a)
+        if n:
+            names[n.strip().lower()] = a
+    sizes = {}
+    for line in ANSI_RE.sub("", out).splitlines():
+        cols = [c.strip() for c in line.split("│")]
+        if len(cols) == 2 and cols[0] and cols[0].lower() in names:
+            m = re.fullmatch(r"([\d.,]+)\s*([KMGT]?i?B)", cols[1])
+            if m and m[2] in BIN_UNITS:
+                sizes[str(names[cols[0].lower()])] = int(float(m[1].replace(",", "")) * BIN_UNITS[m[2]])
+    if sizes:
+        st = _state().get("sizes", {})
+        st.update(sizes)
+        _save_state({"sizes": st, "sizes_checked": time.time()})
+    return sizes
+
+
 def update_available():
     done = _state().get("builds", {})
     return [a for a, v in _latest.items() if v.get("buildid") and done.get(str(a)) != v.get("buildid")]
@@ -134,6 +170,7 @@ def status():
     return {"installed": installed(), "version": s.get("tool_version"), "logged_in": logged_in(), "apps": apps(),
             "latest": {str(k): v for k, v in _latest.items()}, "builds": s.get("builds", {}), "last_run": s.get("last_run"),
             "update_available": update_available(), "auto": settings().get("prefill_auto", False),
+            "sizes": s.get("sizes", {}),
             "os": settings().get("prefill_os", "windows"), "job": job_info(j) if j else None}
 
 
@@ -287,6 +324,8 @@ class Job:
         _save_state({"builds": builds, "last_run": {"t": self.ended, "ok": ok, "code": self.code, "user": self.user,
                                                      "force": "--force" in self.args, "auto": self.auto}})
         audit(self.user, "prefill-finished", f"exit {self.code}{' ok' if ok else ' FAILED'}")
+        if ok:
+            threading.Thread(target=refresh_sizes, daemon=True).start()
 
     def send(self, text):
         if self.ended:
@@ -357,6 +396,8 @@ def watcher(cache_running):
         while True:
             try:
                 check_latest()
+                if logged_in() and time.time() - _state().get("sizes_checked", 0) > 6 * 3600:
+                    refresh_sizes()
                 if (settings().get("prefill_auto") and update_available() and installed() and logged_in()
                         and not (_job and _job.ended is None) and cache_running()):
                     start("auto", auto=True)

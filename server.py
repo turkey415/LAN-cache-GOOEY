@@ -209,7 +209,7 @@ def r_games(h, q):
     pst = prefill.status()
     return {"games": logs.games_summary(), "disk": cs, "fs": config.fs_usage(config.cache_root()),
             "limit": config.env_dict().get("CACHE_DISK_SIZE"),
-            "preloaded": {"builds": pst["builds"], "latest": {k: v.get("buildid") for k, v in pst["latest"].items()},
+            "preloaded": {"builds": pst["builds"], "latest": {k: v.get("buildid") for k, v in pst["latest"].items()}, "sizes": pst["sizes"],
                           "apps": pst["apps"], "last_run": pst["last_run"]}}
 
 

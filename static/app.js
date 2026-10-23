@@ -471,7 +471,16 @@ const G = {
   count: mkCount('#n-gcount', 'Games'), stored: mkCount('#n-stored', 'Fetched from internet'),
   served: mkCount('#n-served', 'Served from cache'), saved: mkCount('#n-saved', 'Hit ratio'),
 };
-let GAMES = [], PRE = { builds: {}, latest: {} };
+let GAMES = [], PRE = { builds: {}, latest: {}, sizes: {} };
+// How much of a game is in the cache, against its full download size from SteamPrefill (when known).
+function completeHtml(g) {
+  const full = g.appid && PRE.sizes && PRE.sizes[g.appid];
+  if (!full) return null;
+  const have = Math.min(g.miss, full), frac = have / full, done = frac >= 0.98;
+  return `<div class="k" style="display:flex;justify-content:space-between;letter-spacing:.04em;text-transform:none;margin-bottom:4px">
+      <span>${done ? '✓ complete' : Math.floor(frac * 100) + '% cached'}</span><span>${fmtBytes(have)} of ${fmtBytes(full)}</span></div>
+    <div class="split" title="Cached ${fmtBytes(have)} of the full ${fmtBytes(full)} download"><b style="width:${(100 * frac).toFixed(1)}%"></b></div>`;
+}
 // Badge for games the Preload tab keeps current: preloaded and up to date, or a newer build is out.
 function preBadge(appid) {
   const have = appid && PRE.builds[appid], latest = appid && PRE.latest[appid];
@@ -507,7 +516,7 @@ function renderGames() {
         <div class="figs"><div class="fig"><span class="k">In cache</span>${seg7(sb[0], 4)}<span class="un">${sb[1]}</span></div>
           <div class="fig"><span class="k">Served</span>${seg7(hb[0], 4)}<span class="un">${hb[1]}</span></div>
           <div class="fig"><span class="k">Clients</span>${seg7(String(g.clients), 4)}<span class="un">machines</span></div></div>
-        <div>${splitCaption(g.hit, g.miss)}${splitBar(g.hit, g.miss)}</div>
+        <div>${completeHtml(g) || splitCaption(g.hit, g.miss) + splitBar(g.hit, g.miss)}</div>
         <span class="sub">Last download ${fmtAgo(g.last)}</span></div></div>`;
   }).join('') : '<div class="empty">Nothing in the cache yet. Games show up here after the first machine downloads them through the cache.</div>';
 }
