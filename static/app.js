@@ -740,12 +740,16 @@ async function loadPreload(first) {
   re.className = 'reactor ' + (running ? 'firing' : r.update_available.length ? 'armed' : r.last_run && r.last_run.ok ? 'ready' : '');
   const tr = r.traffic || { rate: 0, hit: 0, miss: 0 };
   const flowing = running && tr.rate > 0;
+  const pct = pg && pg.fraction != null ? Math.floor(pg.fraction * 100) : null;
   $('#pf-rstate').textContent = running ? (j.phone ? 'approve the sign-in on your phone' : j.prompt ? 'waiting for you: see below'
-    : flowing ? `downloading through the cache · ${fmtRate(tr.rate)} · ${fmtBytes(tr.hit + tr.miss)} in the last 30 s` : 'preloading…') : r.update_available.length ? 'new build available' : r.last_run ? (r.last_run.ok ? 'cache up to date' : 'last preload failed') : 'ready';
+    : pct != null ? `${pct}% · ${fmtBytes(pg.done)} of ${fmtBytes(pg.total)}${flowing ? ' · ' + fmtRate(tr.rate) : ''}`
+    : (pg && pg.stage && pg.stage !== 'starting' ? pg.stage + '…' : 'starting…')) : r.update_available.length ? 'new build available' : r.last_run ? (r.last_run.ok ? 'cache up to date' : 'last preload failed') : 'ready';
   const since = running ? Date.now() / 1000 - j.started : r.last_run ? Date.now() / 1000 - r.last_run.t : null;
   $('#pf-clock').innerHTML = since == null ? '' : seg7(running ? String(Math.floor(since / 60)).padStart(2, '0') + ':' + String(Math.floor(since % 60)).padStart(2, '0') : '--:--', 4);
-  const cells = $$('#pf-cells i'), lead = running ? Math.floor(Date.now() / 250) % 24 : -1;
-  cells.forEach((e, i) => e.className = running ? (i === lead ? 'lead' : i < lead ? 'on' : '') : (r.installed && r.last_run && r.last_run.ok && !r.update_available.length ? 'on' : ''));
+  // LED bar: real progress of the current download (dark until SteamPrefill reports the size); full when up to date.
+  const pg = j && j.progress, frac = running ? (pg && pg.fraction != null ? pg.fraction : 0) : (r.installed && r.last_run && r.last_run.ok && !r.update_available.length ? 1 : 0);
+  const lit = Math.round(frac * 24);
+  $$('#pf-cells i').forEach((e, i) => e.className = i < lit ? 'on' : '');
   $('#pf-go').disabled = running; $('#pf-force').disabled = running; $('#pf-stop').disabled = !running;
   $('#pf-state').innerHTML = `<i class="dot ${running ? 'live' : r.last_run && !r.last_run.ok ? 'err' : r.last_run ? 'on' : ''}"></i>${running ? 'running' : r.last_run ? 'last run ' + fmtAgo(r.last_run.t) : 'never run'}`;
   $('#pf-setup').innerHTML = [

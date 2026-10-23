@@ -13,7 +13,7 @@ import threading
 import time
 
 from . import config, games
-from .util import data_path
+from .util import data_path, is_local_ip
 
 LINE_RE = re.compile(
     r'^\[(?P<svc>[^\]]*)\] (?P<ip>\S+) / \S+ - \S+ \[(?P<time>[^\]]+)\] "(?P<req>[^"]*)" (?P<status>\d{3}) (?P<bytes>\d+) '
@@ -209,6 +209,7 @@ class Stats:
         self.last_flush = time.time()
         self.lines = 0
         self.bad = 0
+        self.local_bytes = 0        # Steam bytes this machine (the preload) has pulled through the cache
         self.wdb = db()
         self.follower = Follower("access.log", self.on_line, start_at=self.saved_pos, on_progress=self.progress)
         self.err_follower = Follower("error.log", HUBS["error"].publish)
@@ -235,6 +236,8 @@ class Stats:
         if ts > now - 120:
             HUBS["access"].publish(line)
         ip, n, cls = m["ip"], int(m["bytes"]), classify(m["cache"])
+        if m["svc"] == "steam" and ts > now - 600 and is_local_ip(ip):
+            self.local_bytes += n
         parts = m["req"].split(" ")
         path = parts[1] if len(parts) > 1 else ""
         gkey = games.identify(m["svc"], m["host"], path)

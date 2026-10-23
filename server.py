@@ -21,7 +21,7 @@ import time
 import urllib.parse
 
 from lcgui import auth, config, docker, games, logs, prefill, storage, system, tools
-from lcgui.util import (DATA_DIR, LANCACHE_DIR, STATIC_DIR, audit, audit_tail, data_path, host_ips, primary_ip,
+from lcgui.util import (DATA_DIR, LANCACHE_DIR, STATIC_DIR, audit, audit_tail, data_path, host_ips, is_local_ip, primary_ip,
                         reverse_dns, run, settings, update_settings)
 
 VERSION = "1.0"
@@ -143,20 +143,8 @@ def r_user_del(h, q, name):
 
 
 # ---------------------------------------------------------------- dashboard data
-_own = {"t": 0, "ips": set()}
-
-
 def _is_local(ip):
-    """Requests from this machine itself. SteamPrefill reaches the cache via localhost or a Docker bridge,
-    whose gateway address belongs to this machine. Exact addresses only, so players on 172.x LANs aren't caught."""
-    if time.time() - _own["t"] > 60:
-        code, out = run(["ip", "-j", "-4", "addr"], timeout=5)
-        try:
-            _own["ips"] = {a["local"] for i in json.loads(out) for a in i.get("addr_info", [])}
-        except (ValueError, KeyError):
-            pass
-        _own["t"] = time.time()
-    return ip.startswith("127.") or ip in _own["ips"]
+    return is_local_ip(ip)
 
 
 def _label(ip):

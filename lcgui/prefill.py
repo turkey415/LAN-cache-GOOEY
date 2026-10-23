@@ -29,6 +29,9 @@ CONFIG_DIR = os.path.join(TOOL_DIR, "Config")
 STATE_FILE = data_path("prefill_state.json")
 LOG_FILE = data_path("prefill.log")      # full output of the latest preload run, for troubleshooting
 RELEASES = "https://api.github.com/repos/tpill90/steam-lancache-prefill/releases/latest"
+SIZE_RE = re.compile(r"Downloading ([\d.,]+) ?(B|KB|MB|GB|TB) from ([\d,]+) chunks")
+START_RE = re.compile(r"Starting (.+?)\s*$")
+UNITS = {"B": 1, "KB": 1e3, "MB": 1e6, "GB": 1e9, "TB": 1e12}   # SteamPrefill prints decimal units
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(\x07|\x1b\\)|\x1b[()][A-Z0-9]|[\x00-\x08\x0b\x0c\x0e-\x1f]")
 DEFAULT_APPS = [730]   # Counter-Strike 2
 
@@ -142,6 +145,8 @@ class Job:
         # username and password prompts after 30 seconds, so these are answered at once. Kept in memory
         # only until used; never written anywhere.
         self.answers = dict(answers or {})
+        self.stage = "starting"
+        self.progress = {"total": 0, "done_before": 0, "base": None, "apps_done": 0, "app": None}
         self.started, self.ended, self.code = time.time(), None, None
         self.lines, self.partial, self.prompt, self.secret = [], "", None, False
         self.builds_at_start = {a: v.get("buildid") for a, v in _latest.items()}
@@ -168,9 +173,46 @@ class Job:
                 if ln.strip():
                     self.lines.append(ln)
                     self._log(ln)
+                    self._track(ln)
             self.partial = parts[-1]
             if len(self.lines) > 5000:
                 del self.lines[:1000]
+
+    def _track(self, ln):
+        """Follow SteamPrefill's own messages to know the stage and the size of the current download."""
+        from . import logs
+        pr = self.progress
+        low = ln.lower()
+        m = SIZE_RE.search(ln)
+        if m:
+            pr["total"] = pr["done_before"] + float(m[1].replace(",", "")) * UNITS[m[2]]
+            pr["base"] = logs.STATS.local_bytes
+            self.stage = "downloading"
+        elif "finished downloading" in low:
+            if pr["base"] is not None:
+                pr["done_before"] = pr["total"]
+                pr["base"] = None
+            pr["apps_done"] += 1
+            self.stage = "finishing"
+        elif START_RE.search(ln) and "login" not in low:
+            pr["app"] = START_RE.search(ln)[1].strip()
+            self.stage = "reading game info"
+        elif "up to date" in low:
+            self.stage = "checking"
+        elif "logging" in low or "login" in low:
+            self.stage = "logging in"
+        elif "detecting lancache" in low or "detected lancache" in low:
+            self.stage = "finding the cache"
+        elif "prefill complete" in low:
+            self.stage = "done"
+
+    def progress_info(self):
+        from . import logs
+        pr = dict(self.progress)
+        done = pr["done_before"] + (max(0, logs.STATS.local_bytes - pr["base"]) if pr["base"] is not None else 0)
+        total = pr["total"]
+        return {"stage": self.stage, "app": pr["app"], "total": total, "done": min(done, total) if total else done,
+                "fraction": min(1.0, done / total) if total else None}
 
     def _log(self, line):
         try:
@@ -280,7 +322,7 @@ def _phone_wait(j):
 
 def job_info(j, since=0):
     with j.lock:
-        return {"phone": j.ended is None and _phone_wait(j),"running": j.ended is None, "started": j.started, "ended": j.ended, "code": j.code, "auto": j.auto,
+        return {"phone": j.ended is None and _phone_wait(j), "progress": j.progress_info(),"running": j.ended is None, "started": j.started, "ended": j.ended, "code": j.code, "auto": j.auto,
                 "force": "--force" in j.args, "lines": j.lines[since:], "n": len(j.lines),
                 "partial": j.partial.split("\r")[-1][-300:], "prompt": j.prompt, "secret": j.secret}
 
@@ -295,7 +337,8 @@ def start(user, force=False, auto=False, answers=None):
         write_selection()
         if not _latest:
             check_latest()
-        args = ["prefill", "--no-ansi", "--unit", "bits", "--os", settings().get("prefill_os", "windows")]
+        # --verbose makes SteamPrefill print the download size, which drives the progress bar.
+        args = ["prefill", "--no-ansi", "--verbose", "--unit", "bits", "--os", settings().get("prefill_os", "windows")]
         if force:
             args.append("--force")
         _job = Job(args, user, auto, answers)

@@ -154,3 +154,20 @@ def reverse_dns(ip):
             _rdns[ip] = name
     threading.Thread(target=work, daemon=True).start()
     return None
+
+
+_own = {"t": 0, "ips": set()}
+
+
+def is_local_ip(ip):
+    """True for requests from this machine itself (SteamPrefill reaches the cache via localhost or a
+    Docker bridge, whose gateway address belongs to this machine). Exact addresses only, so players on
+    172.x networks are not mistaken for it."""
+    if time.time() - _own["t"] > 60:
+        code, out = run(["ip", "-j", "-4", "addr"], timeout=5)
+        try:
+            _own["ips"] = {a["local"] for i in json.loads(out) for a in i.get("addr_info", [])}
+        except (ValueError, KeyError):
+            pass
+        _own["t"] = time.time()
+    return ip.startswith("127.") or ip in _own["ips"]
