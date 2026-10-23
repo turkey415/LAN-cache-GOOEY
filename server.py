@@ -20,7 +20,7 @@ import threading
 import time
 import urllib.parse
 
-from lcgui import auth, config, docker, games, logs, prefill, storage, system, tools, update
+from lcgui import auth, config, docker, games, logs, prefill, purge, storage, system, tools, update
 from lcgui.util import (DATA_DIR, LANCACHE_DIR, STATIC_DIR, audit, audit_tail, data_path, host_ips, is_local_ip, primary_ip,
                         reverse_dns, run, settings, update_settings)
 
@@ -217,7 +217,9 @@ def r_games(h, q):
             est = None if exact else games.full_size(g["appid"])
             if exact or est:
                 sizes[str(g["appid"])] = {"bytes": exact or est, "exact": bool(exact)}
-    return {"games": gl, "sizes": sizes, "disk": cs, "fs": config.fs_usage(config.cache_root()),
+    for g in gl:
+        g["whole_service"] = purge.whole_service(g["id"])
+    return {"games": gl, "purge": purge.status(), "sizes": sizes, "disk": cs, "fs": config.fs_usage(config.cache_root()),
             "limit": config.env_dict().get("CACHE_DISK_SIZE"),
             "preloaded": {"builds": pst["builds"], "latest": {k: v.get("buildid") for k, v in pst["latest"].items()}, "sizes": pst["sizes"],
                           "apps": pst["apps"], "last_run": pst["last_run"]}}
@@ -231,6 +233,19 @@ def r_game(h, q, gid):
     for c in g["clients"]:
         c.update(label=_label(c["ip"]), hostname=reverse_dns(c["ip"]))
     return g
+
+
+@route("GET", "/api/purge")
+def r_purge_status(h, q):
+    return {"job": purge.status()}
+
+
+@route("POST", "/api/purge", role="admin")
+def r_purge(h, body):
+    try:
+        return {"job": purge.start(str(body.get("id", "")), h.sess["user"])}
+    except (ValueError, RuntimeError) as e:
+        raise HttpError(400, str(e))
 
 
 @route("GET", "/api/cover/(?P<appid>\\d+)")

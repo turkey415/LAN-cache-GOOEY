@@ -472,7 +472,7 @@ const G = {
   count: mkCount('#n-gcount', 'Games'), stored: mkCount('#n-stored', 'Fetched from internet'),
   served: mkCount('#n-served', 'Served from cache'), saved: mkCount('#n-saved', 'Hit ratio'),
 };
-let GAMES = [], PRE = { builds: {}, latest: {}, sizes: {} }, SIZES = {};
+let GAMES = [], PRE = { builds: {}, latest: {}, sizes: {} }, SIZES = {}, PURGE = null;
 // How much of a game is in the cache, against its full download size from SteamPrefill (when known).
 // Machines that downloaded this game mostly from the cache (blue) or mostly from the internet (purple).
 function usersHtml(g) {
@@ -501,6 +501,7 @@ const splitCaption = (hit, miss) => { const t = hit + miss; return t ? `<div cla
 async function loadGames() {
   const r = await api('GET', '/api/games');
   GAMES = r.games; PRE = r.preloaded || PRE; SIZES = r.sizes || {};
+  if (r.purge && r.purge.running) { PURGE = r.purge; pollPurge(); }
   const lim = sizeBytes(r.limit), used = r.disk.bytes;
   G.cache({ f: lim && used != null ? used / lim : 0, text: used != null ? splitBytes(used)[0] : '--', unit: used != null ? splitBytes(used)[1] : '', scale: r.limit ? 'limit ' + r.limit : '', off: used == null });
   const fu = r.fs.total ? (r.fs.total - r.fs.free) / r.fs.total : 0;
@@ -520,7 +521,7 @@ function renderGames() {
   $('#games').innerHTML = list.length ? list.map(g => {
     const sb = splitBytes(g.miss), hb = splitBytes(g.hit);
     return `<div class="game" tabindex="0" data-gid="${esc(g.id)}">
-      <div class="art"><span class="ph">${esc((g.name.match(/[A-Z0-9]/g) || ['?']).slice(0, 3).join(''))}</span>${g.appid ? `<img src="/api/cover/${g.appid}" alt="" loading="lazy" data-fallback>` : ''}<span class="svc svcb">${esc(g.service_name)}</span></div>
+      <div class="art"><span class="ph">${esc((g.name.match(/[A-Z0-9]/g) || ['?']).slice(0, 3).join(''))}</span>${g.appid ? `<img src="/api/cover/${g.appid}" alt="" loading="lazy" data-fallback>` : ''}<span class="svc svcb">${esc(g.service_name)}</span>${isAdmin() ? `<button class="gdel" data-del="${esc(g.id)}" title="Delete this game from the cache" aria-label="Delete ${esc(g.name)} from the cache">✕ DELETE</button>` : ''}${purgeOverlay(g.id)}</div>
       <div class="body"><div class="ttl" title="${esc(g.name)}">${esc(g.name)}</div>${preBadge(g.appid) ? `<div>${preBadge(g.appid)}</div>` : ''}
         <div class="figs"><div class="fig"><span class="k">In cache</span>${seg7(sb[0], 4)}<span class="un">${sb[1]}</span></div>
           <div class="fig"><span class="k">Served</span>${seg7(hb[0], 4)}<span class="un">${hb[1]}</span></div>
@@ -531,7 +532,48 @@ function renderGames() {
   }).join('') : '<div class="empty">Nothing in the cache yet. Games show up here after the first machine downloads them through the cache.</div>';
 }
 $('#g-filter').oninput = renderGames; $('#g-sort').onchange = renderGames;
-$('#games').addEventListener('click', e => { const c = e.target.closest('[data-gid]'); if (c) openGame(c.dataset.gid); });
+$('#games').addEventListener('click', e => { if (e.target.closest('[data-del]')) return; const c = e.target.closest('[data-gid]'); if (c) openGame(c.dataset.gid); });
+// ---- delete a game from the cache (admins): hazard cover, then the red button
+function purgeOverlay(id) {
+  if (!PURGE || PURGE.id !== id || !PURGE.running) return '';
+  return `<div class="purging"><div class="lamp2 on blink"><i></i><span>DELETING</span></div><span>${fmtBytes(PURGE.freed)} freed · ${PURGE.scanned.toLocaleString()} files checked</span></div>`;
+}
+let purgeTimer = null;
+async function pollPurge() {
+  if (purgeTimer) return;
+  purgeTimer = setInterval(async () => {
+    let r; try { r = await api('GET', '/api/purge'); } catch (e) { return; }
+    const was = PURGE; PURGE = r.job;
+    if (PURGE && PURGE.running) { if (TAB === 'games' && $('#game-detail').hidden) renderGames(); return; }
+    clearInterval(purgeTimer); purgeTimer = null;
+    if (PURGE && was && PURGE.started === was.started) {
+      if (PURGE.error) toast(`Couldn't delete ${PURGE.name}: ${PURGE.error}`, 'bad');
+      else toast(`Deleted ${PURGE.name}: ${fmtBytes(PURGE.freed)} freed (${PURGE.deleted.toLocaleString()} files).`, 'good');
+    }
+    if (TAB === 'games') { if (!$('#game-detail').hidden) { $('#game-detail').hidden = true; $('#games-list').hidden = false; } loadGames(); }
+  }, 1000);
+}
+document.addEventListener('click', async e => {
+  const b = e.target.closest('[data-del]');
+  if (!b) return;
+  e.stopPropagation();
+  const g = GAMES.find(x => x.id === b.dataset.del) || { id: b.dataset.del, name: $('#game-detail h1')?.textContent || b.dataset.del, miss: 0 };
+  if (PURGE && PURGE.running) return toast(`Already deleting ${PURGE.name}. Wait for it to finish.`, 'bad');
+  const pre = g.appid && PRE.builds[g.appid];
+  const html = `<p class="sub" style="margin:0 0 10px">Deletes <b>${esc(g.name)}</b> (about <b>${fmtBytes(g.miss)}</b>) from the cache disk. Players who download it next get it from the internet, and the cache stores it again.</p>
+    ${g.whole_service ? `<p class="sub" style="margin:0 0 10px;color:var(--warn,#ffb02e)">The cache only records the service for ${esc(g.service_name)} downloads, so this deletes <b>everything from ${esc(g.service_name)}</b>.</p>` : ''}
+    <p class="sub" style="margin:0 0 12px">Its download history is cleared too${pre ? ', and the Preload tab will show it as not preloaded' : ''}. This can't be undone.</p>
+    <div class="arm" data-armid="purge"><div><div class="t"><b>Delete from cache</b><div class="lamp2" title="Armed"><i></i><span>ARMED</span></div></div><div class="sub">Lift the cover, then press the red button.</div></div>
+    <div class="guard"><button type="submit" value="ok" class="redbtn" disabled aria-label="Delete ${esc(g.name)}">DELETE</button><button type="button" class="cover" aria-label="Lift the cover to arm"><span>LIFT TO ARM</span></button></div></div>`;
+  const p = ask({ title: `Delete ${g.name}?`, html, ok: false });
+  const el = $('#dlg-body .arm');
+  $('.cover', el).onclick = () => setArmed(el, true);
+  if (!await p) return;
+  try {
+    const r = await api('POST', '/api/purge', { id: g.id });
+    PURGE = r.job; toast(`Deleting ${g.name}…`); renderGames(); pollPurge();
+  } catch (err) { toast(err.message, 'bad'); }
+}, true);
 $('#games').addEventListener('keydown', e => { const c = e.target.closest('[data-gid]'); if (c && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openGame(c.dataset.gid); } });
 async function openGame(gid) {
   let g;
@@ -539,7 +581,7 @@ async function openGame(gid) {
   const hit = g.clients.reduce((a, c) => a + c.hit, 0), miss = g.clients.reduce((a, c) => a + c.miss, 0);
   $('#games-list').hidden = true;
   const box = $('#game-detail'); box.hidden = false;
-  box.innerHTML = `<div class="hrow" style="margin-bottom:14px"><button class="btn" id="g-back">← All games</button></div>
+  box.innerHTML = `<div class="hrow" style="margin-bottom:14px"><button class="btn" id="g-back">← All games</button><span class="spacer"></span>${isAdmin() ? `<button class="btn danger" data-del="${esc(g.id)}">✕ Delete from cache</button>` : ''}</div>
     <div class="detail-head">${g.appid ? `<img src="/api/cover/${g.appid}" alt="" data-fallback>` : ''}
       <div><h1>${esc(g.name)}</h1><div class="sub">${esc(g.service_name)}${g.appid ? ` · Steam app ${g.appid}` : ''}</div>${preBadge(g.appid) ? `<div style="margin-top:8px">${preBadge(g.appid)}</div>` : ''}
       <div class="hrow" style="margin-top:12px;gap:22px">

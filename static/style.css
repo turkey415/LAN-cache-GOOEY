@@ -608,3 +608,14 @@ body.viewer .admin-only { display: none !important; }
 /* GUI update waiting: red dot on the Configuration tab */
 nav.tabs button.upd i, nav.tabs button.upd.act i { background: #ff4d4d; box-shadow: 0 0 7px #ff4d4d; }
 #gu-lamp { flex-direction: row; min-width: 0; padding: 4px 7px; }
+
+/* delete a game from the cache */
+.game .art .gdel { position: absolute; right: 8px; top: 8px; z-index: 2; cursor: pointer; font: 700 9px ui-monospace, Menlo, Consolas, monospace; letter-spacing: .12em; padding: 3px 7px; border-radius: 3px; background: rgba(0, 0, 0, .7); color: #ff8a8a; border: 1px solid rgba(255, 77, 77, .45); opacity: 0; transition: opacity .15s, background .15s; }
+.game:hover .art .gdel, .game:focus-within .art .gdel, .game .art .gdel:focus-visible { opacity: 1; }
+.game .art .gdel:hover { background: #e01b1b; color: #fff; border-color: #ff4d4d; }
+@media (hover: none) { .game .art .gdel { opacity: 1; } }
+.game .art .purging { position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; background: rgba(10, 10, 9, .82); font: 600 11px ui-monospace, Menlo, Consolas, monospace; color: #ffb3b3; text-align: center; padding: 8px; }
+.game .art .purging .lamp2 { --lc: #ff2a2a; }
+.btn.danger { color: #ff8a8a; border-color: rgba(255, 77, 77, .5); }
+.btn.danger:hover { background: #e01b1b; color: #fff; border-color: #ff4d4d; }
+#dlg-body .arm { grid-template-columns: minmax(0, 1fr) 110px; }

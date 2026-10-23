@@ -39,7 +39,7 @@ the **Service** tab.
 |---|---|
 | **Deck** | Throughput dials (from cache vs from internet), hit ratio, CPU, temperature, cache disk, a 10-minute chart, and who is downloading. |
 | **Downloads** | Every machine downloading right now: game (with cover art), platform (Steam, Epic, Battle.net…), speed, and a **CACHE** / **INTERNET** / **MIXED** badge. Name machines ("Seat 12") with ✎. Below that is every client ever seen; click one for its per-game history. |
-| **Cache Browser** | Every cached game with cover art, size in the cache, data served, and machine count. Click a game for its download history per machine. |
+| **Cache Browser** | Every cached game with cover art, size in the cache, data served, and machine count. Click a game for its download history per machine. Admins can **delete** a game from the cache (✕ DELETE on its card, behind a hazard cover). |
 | **Preload** | Download CS2 (or any Steam games) into the cache before players do. See below. |
 | **Live Logs** | Streaming access log (hits green, misses orange), nginx errors, the cache and DNS container logs, and the GUI's own log. Filter, pause, hits/misses only. |
 | **Health** | CPU load per core, clock, temperatures (CPU, NVMe, GPU), memory, load, drives, network throughput and link use, container stats. |
