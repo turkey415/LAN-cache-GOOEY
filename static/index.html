@@ -125,7 +125,7 @@
       <input type="search" id="g-filter" placeholder="Filter…" style="width:200px">
       <select id="g-sort" style="width:auto"><option value="size">Biggest</option><option value="served">Most served</option><option value="recent">Most recent</option><option value="name">Name</option></select></h2>
     <div class="games" id="games"></div>
-    <p class="sub" style="margin:12px 0 0"><b>In cache</b> is everything fetched from the internet for that game, which the cache stored (until old data is pruned). For preloaded games the bar shows how much of the full download is cached (<b>✓ complete</b> when all of it is). For other games it shows how their traffic split between <span style="color:var(--hit)">served from the cache</span> and <span style="color:var(--miss)">fetched from the internet</span>.</p>
+    <p class="sub" style="margin:12px 0 0"><b>In cache</b> is everything fetched from the internet for that game, which the cache stored (until old data is pruned). For preloaded games the bar shows how much of the full download is cached (<b>✓ complete</b> when all of it is). For other games it shows how their traffic split between <span style="color:var(--hit)">served from the cache</span> and <span style="color:var(--miss)">fetched from the internet</span>. The <span style="color:#7fb2ff">blue</span> / <span style="color:#c79bff">purple</span> bar counts the machines that got the game mostly from the cache vs mostly from the internet (the preload itself isn't counted).</p>
   </section>
   <section class="card" id="game-detail" hidden></section>
 </main>

@@ -353,7 +353,7 @@ def totals(since=0):
 
 def games_summary():
     rows = query("SELECT gkey, SUM(hit), SUM(miss), SUM(reqs), MIN(first), MAX(last) FROM traffic GROUP BY gkey")
-    ips = query("SELECT DISTINCT gkey, ip FROM traffic")
+    ips = query("SELECT gkey, ip, SUM(hit), SUM(miss) FROM traffic GROUP BY gkey, ip")
     out = {}
     for gkey, hit, miss, reqs, first, last in rows:
         d = games.describe(gkey)
@@ -365,13 +365,26 @@ def games_summary():
         g["last"] = max(g["last"], last)
         if d["depot"]:
             g["depots"].append(d["depot"])
-    for gkey, ip in ips:
+    per_user = {}   # (game id, ip) -> [hit, miss]
+    for gkey, ip, hit, miss in ips:
         gid = games.describe(gkey)["id"]
         if gid in out:
             out[gid]["ips"].add(ip)
+            v = per_user.setdefault((gid, ip), [0, 0])
+            v[0] += hit
+            v[1] += miss
+    # Machines that got each game mostly from the cache vs mostly from the internet.
+    # This machine (the preload) is not a player, so it is left out.
+    for (gid, ip), (hit, miss) in per_user.items():
+        if is_local_ip(ip) or hit + miss == 0:
+            continue
+        key = "users_cache" if hit >= miss else "users_internet"
+        out[gid][key] = out[gid].get(key, 0) + 1
     res = []
     for g in out.values():
         g["clients"] = len(g.pop("ips"))
+        g.setdefault("users_cache", 0)
+        g.setdefault("users_internet", 0)
         g["depots"].sort()
         res.append(g)
     res.sort(key=lambda g: -(g["hit"] + g["miss"]))

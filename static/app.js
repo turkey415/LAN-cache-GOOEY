@@ -473,6 +473,13 @@ const G = {
 };
 let GAMES = [], PRE = { builds: {}, latest: {}, sizes: {} };
 // How much of a game is in the cache, against its full download size from SteamPrefill (when known).
+// Machines that downloaded this game mostly from the cache (blue) or mostly from the internet (purple).
+function usersHtml(g) {
+  const c = g.users_cache || 0, i = g.users_internet || 0, t = c + i;
+  if (!t) return `<div class="k cap"><span>no machines yet</span></div><div class="split users"></div>`;
+  return `<div class="k cap"><span class="bl">${c} from cache</span><span class="pu">${i} from internet</span></div>
+    <div class="split users" title="${c} machine(s) got it mostly from the cache, ${i} mostly from the internet"><b style="width:${100 * c / t}%"></b><s style="width:${100 * i / t}%"></s></div>`;
+}
 function completeHtml(g) {
   const full = g.appid && PRE.sizes && PRE.sizes[g.appid];
   if (!full) return null;
@@ -517,6 +524,7 @@ function renderGames() {
           <div class="fig"><span class="k">Served</span>${seg7(hb[0], 4)}<span class="un">${hb[1]}</span></div>
           <div class="fig"><span class="k">Clients</span>${seg7(String(g.clients), 4)}<span class="un">machines</span></div></div>
         <div>${completeHtml(g) || splitCaption(g.hit, g.miss) + splitBar(g.hit, g.miss)}</div>
+        <div>${usersHtml(g)}</div>
         <span class="sub">Last download ${fmtAgo(g.last)}</span></div></div>`;
   }).join('') : '<div class="empty">Nothing in the cache yet. Games show up here after the first machine downloads them through the cache.</div>';
 }
