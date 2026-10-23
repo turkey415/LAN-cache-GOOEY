@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LAN Cache GOOEY</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ============ login ============ -->
+<div class="login" id="login" hidden>
+  <form class="card form" id="login-form" autocomplete="on">
+    <div class="brand"><img src="favicon.svg" width="26" height="26" alt=""> LAN Cache GOOEY</div>
+    <label class="f">Username<input type="text" name="username" autocomplete="username" required autofocus></label>
+    <label class="f">Password<input type="password" name="password" autocomplete="current-password" required></label>
+    <div class="err-msg" id="login-err"></div>
+    <button class="btn primary" type="submit">Log in</button>
+    <div class="sub">First start? The admin password is printed in the GUI's log and saved in <code>webgui/data/INITIAL_ADMIN_PASSWORD.txt</code>.</div>
+  </form>
+</div>
+
+<!-- ============ app ============ -->
+<div id="app" hidden>
+<div class="chrome">
+<header class="top">
+  <div class="brand"><img src="favicon.svg" width="24" height="24" alt=""> <span>LAN Cache GOOEY</span></div>
+  <span class="sub hide-sm" id="hostline"></span>
+  <span class="spacer"></span>
+  <span class="pill" id="srv-pill"><i class="dot"></i><span>…</span></span>
+  <span class="who">
+    <span class="tag-role" id="me-role"></span>
+    <span class="sub hide-sm" id="me-name"></span>
+    <button class="btn ghost" id="logout">Log out</button>
+  </span>
+</header>
+<nav class="tabs" id="tabs">
+  <button data-tab="deck" class="act"><i></i>Deck</button>
+  <button data-tab="hosts"><i></i>Downloads</button>
+  <button data-tab="games"><i></i>Cache Browser</button>
+  <button data-tab="preload"><i></i>Preload</button>
+  <button data-tab="logs"><i></i>Live Logs</button>
+  <button data-tab="health"><i></i>Health</button>
+  <button data-tab="server"><i></i>Server</button>
+  <button data-tab="config"><i></i>Configuration</button>
+  <button data-tab="users"><i></i>Users</button>
+</nav>
+</div>
+
+<!-- front panel shown on every tab -->
+<div class="page" style="padding-bottom:0">
+  <section class="card rig">
+    <div class="lamps" id="lamps"></div>
+    <div class="smeter">
+      <span class="k">Output</span>
+      <div class="leds" id="sm-leds"></div>
+      <div id="sm-rd"></div>
+      <div class="sm-scale"><span>1M</span><span>10M</span><span>100M</span><span>1G</span><span>10G</span></div>
+      <span class="sm-un" id="sm-un">MBPS</span>
+    </div>
+  </section>
+</div>
+
+<!-- ---------- DECK (overview) ---------- -->
+<main class="page" data-page="deck">
+  <section class="card deck">
+    <h2>Throughput <span class="spacer"></span><span class="lamp" id="deck-live"><i class="dot"></i>idle</span></h2>
+    <div class="dials">
+      <div class="well"><div id="g-hit"></div><div class="subs" id="subs-hit"></div></div>
+      <div class="well"><div id="g-miss"></div><div class="subs" id="subs-miss"></div></div>
+    </div>
+    <div class="meters">
+      <div class="well" id="m-ratio"></div>
+      <div class="well" id="m-cpu"></div>
+      <div class="well" id="m-temp"></div>
+      <div class="well" id="m-disk"></div>
+    </div>
+    <div class="counters">
+      <div class="well" id="n-active"></div>
+      <div class="well" id="n-clients"></div>
+      <div class="well" id="n-games"></div>
+      <div class="well" id="n-reqs"></div>
+    </div>
+  </section>
+  <section class="card">
+    <h2>Last 10 minutes <span class="spacer"></span>
+      <span class="legend"><span><i class="sw" style="background:var(--hit)"></i>From cache</span><span><i class="sw" style="background:var(--miss)"></i>From internet</span></span></h2>
+    <div class="chart big" id="c-tput"></div>
+  </section>
+  <div class="grid2">
+    <section class="card"><h2>Downloading now <span class="spacer"></span><button class="btn ghost" data-goto="hosts">All downloads →</button></h2><div class="hosts" id="deck-hosts"></div></section>
+    <section class="card"><h2>Top games in cache <span class="spacer"></span><button class="btn ghost" data-goto="games">Cache browser →</button></h2><div class="tbl" id="deck-games"></div></section>
+  </div>
+</main>
+
+<!-- ---------- DOWNLOADS ---------- -->
+<main class="page" data-page="hosts" hidden>
+  <section class="card">
+    <h2>Downloading now <span class="badge" id="hosts-n">0</span><span class="spacer"></span>
+      <span class="sub">Active = traffic in the last</span>
+      <select id="win" style="width:auto"><option value="30">30 s</option><option value="60">60 s</option><option value="180">3 min</option><option value="600">10 min</option></select></h2>
+    <div class="hosts" id="hosts"></div>
+    <p class="sub" style="margin:12px 0 0"><span class="src cache"><i></i>CACHE</span> 90%+ served from this server ·
+      <span class="src internet"><i></i>INTERNET</span> 90%+ fetched from the internet (first download of something, or a cache miss) ·
+      <span class="src mixed"><i></i>MIXED</span> in between</p>
+  </section>
+  <section class="card">
+    <h2>Every client seen <span class="spacer"></span><input type="search" id="cl-filter" placeholder="Filter by IP, name, game…" style="width:240px"></h2>
+    <div class="tbl" id="clients-all"></div>
+  </section>
+</main>
+
+<!-- ---------- CACHE BROWSER ---------- -->
+<main class="page" data-page="games" hidden>
+  <section class="card deck">
+    <h2>Cache storage <span class="spacer"></span><span class="sub" id="disk-note"></span></h2>
+    <div class="meters"><div class="well" id="m-cache"></div><div class="well" id="m-fs"></div></div>
+    <div class="counters">
+      <div class="well" id="n-gcount"></div><div class="well" id="n-stored"></div><div class="well" id="n-served"></div><div class="well" id="n-saved"></div>
+    </div>
+  </section>
+  <section class="card" id="games-list">
+    <h2>Cached games <span class="spacer"></span>
+      <input type="search" id="g-filter" placeholder="Filter…" style="width:200px">
+      <select id="g-sort" style="width:auto"><option value="size">Biggest</option><option value="served">Most served</option><option value="recent">Most recent</option><option value="name">Name</option></select></h2>
+    <div class="games" id="games"></div>
+    <p class="sub" style="margin:12px 0 0">Size is worked out from the logs: everything fetched from the internet is stored in the cache, so that's the footprint (until old data is pruned).</p>
+  </section>
+  <section class="card" id="game-detail" hidden></section>
+</main>
+
+<!-- ---------- PRELOAD ---------- -->
+<main class="page" data-page="preload" hidden>
+  <div class="cols">
+    <div class="stack">
+      <section class="card deck">
+        <h2>Preload into the cache <span class="spacer"></span><span class="lamp" id="pf-state"><i class="dot"></i>…</span></h2>
+        <div class="lamps" id="pf-lamps"></div>
+        <div class="hosts" id="pf-apps"></div>
+        <div class="reactor" id="pf-reactor">
+          <div class="top"><span class="rstate" id="pf-rstate">…</span><span id="pf-clock"></span></div>
+          <div class="cells" id="pf-cells"></div>
+          <button class="fire admin-only" id="pf-go"><i></i><span>Preload CS2</span></button>
+          <div class="power admin-only">
+            <button class="fire sm" id="pf-check"><i></i>Check for update</button>
+            <button class="fire sm" id="pf-force"><i></i>Force full download</button>
+            <button class="fire sm stop" id="pf-stop"><i></i>Stop</button>
+          </div>
+          <div class="fine">Downloads the newest build through this cache, so every player after that gets it at LAN speed.
+            If the cache already has the newest build, it finishes in seconds. <b>Force</b> downloads everything again (use it if the cache was wiped).</div>
+          <p class="ro-note fine">You are a viewer, so the controls are hidden.</p>
+        </div>
+      </section>
+      <section class="card">
+        <h2>SteamPrefill output <span class="spacer"></span><span class="sub" id="pf-jobline"></span></h2>
+        <div class="console jobout" id="pf-out" style="height:340px"><div class="note">Output appears here when a preload runs.</div></div>
+        <form class="hrow admin-only" id="pf-prompt" hidden style="margin-top:10px">
+          <label class="f" style="flex:1"><span id="pf-prompt-text"></span><input type="text" id="pf-answer" autocomplete="off"></label>
+          <button class="btn primary" type="submit">Send</button>
+        </form>
+      </section>
+    </div>
+    <div class="stack">
+      <section class="card">
+        <h2>Setup</h2>
+        <div class="checks" id="pf-setup"></div>
+        <div class="hrow admin-only" style="margin-top:10px"><button class="btn" id="pf-install">Download SteamPrefill</button></div>
+      </section>
+      <section class="card">
+        <h2>Options</h2>
+        <div class="form">
+          <label class="toggle"><input type="checkbox" id="pf-auto"><span>Preload automatically when Steam releases a new build (checked every 10 minutes)</span></label>
+          <div class="f"><span>Download for</span>
+            <div class="hrow"><label class="toggle"><input type="checkbox" class="pf-os" value="windows">Windows</label><label class="toggle"><input type="checkbox" class="pf-os" value="linux">Linux</label><label class="toggle"><input type="checkbox" class="pf-os" value="macos">macOS</label></div></div>
+          <label class="f">Steam app IDs to preload (CS2 is 730)<input type="text" id="pf-apps-in" placeholder="730"></label>
+          <div class="admin-only"><button class="btn" id="pf-save">Save options</button></div>
+        </div>
+      </section>
+      <section class="card">
+        <h2>How it works</h2>
+        <ul class="tips">
+          <li>Uses <a href="https://github.com/tpill90/steam-lancache-prefill" target="_blank" rel="noopener">SteamPrefill</a>, running on this machine. It downloads through the cache and throws the data away, so the cache keeps a copy.</li>
+          <li>It needs a Steam account that has CS2 in its library (launch CS2 once on that account). The first run asks for the username, password and a Steam Guard code: type them in the box under the output. After that the login is remembered; the password is never saved.</li>
+          <li>Preload the night before, then press it again whenever the <b>UPD</b> lamp lights up during the event.</li>
+          <li>The cache must be running, or the download goes nowhere.</li>
+        </ul>
+      </section>
+    </div>
+  </div>
+</main>
+
+<!-- ---------- LOGS ---------- -->
+<main class="page" data-page="logs" hidden>
+  <section class="card">
+    <h2>Live log <span class="spacer"></span><span class="lamp" id="log-state"><i class="dot"></i>…</span></h2>
+    <div class="hrow" style="margin-bottom:12px">
+      <div class="subtabs" id="log-src">
+        <button data-src="access" class="act">Access</button><button data-src="error">Errors</button>
+        <button data-src="monolithic">Cache container</button><button data-src="dns">DNS container</button><button data-src="gui">GUI</button>
+      </div>
+      <span class="spacer"></span>
+      <div class="subtabs" id="log-kind"><button data-k="" class="act">All</button><button data-k="HIT">Hits</button><button data-k="MISS">Misses</button></div>
+      <input type="search" id="log-filter" placeholder="Filter (text or IP)…" style="width:220px">
+      <button class="btn" id="log-pause">Pause</button>
+      <button class="btn" id="log-clear">Clear</button>
+    </div>
+    <div class="console" id="console"></div>
+    <div class="hrow sub" style="margin-top:8px"><span id="log-count"></span><span class="spacer"></span><label class="toggle"><input type="checkbox" id="log-follow" checked>Follow newest</label></div>
+  </section>
+</main>
+
+<!-- ---------- HEALTH ---------- -->
+<main class="page" data-page="health" hidden>
+  <section class="card deck">
+    <h2>Host <span class="spacer"></span><span class="sub" id="h-info"></span></h2>
+    <div class="minis">
+      <div class="well" id="h-cpu"></div><div class="well" id="h-temp"></div><div class="well" id="h-freq"></div><div class="well" id="h-mem"></div>
+    </div>
+    <div class="meters" id="h-meters"></div>
+  </section>
+  <div class="grid2">
+    <section class="card"><h2>CPU and temperature, 15 min</h2><div class="chart small" id="c-cpu"></div></section>
+    <section class="card"><h2>Network, 15 min <span class="spacer"></span><span class="legend"><span><i class="sw" style="background:var(--s3)"></i>Sent to players</span><span><i class="sw" style="background:var(--s2)"></i>Received</span></span></h2><div class="chart small" id="c-net"></div></section>
+  </div>
+  <section class="card"><h2>CPU cores</h2><div class="cores" id="h-cores"></div></section>
+  <div class="grid2">
+    <section class="card"><h2>Temperatures</h2><div class="temps" id="h-temps"></div></section>
+    <section class="card"><h2>Network interfaces</h2><div class="tbl" id="h-net"></div></section>
+  </div>
+  <div class="grid2">
+    <section class="card"><h2>Disks</h2><div class="tbl" id="h-disks"></div></section>
+    <section class="card"><h2>Containers</h2><div class="tbl" id="h-ctr"></div></section>
+  </div>
+</main>
+
+<!-- ---------- SERVER ---------- -->
+<main class="page" data-page="server" hidden>
+  <div class="cols">
+    <div class="stack">
+      <section class="card">
+        <h2>Cache server <span class="spacer"></span><span class="lamp" id="srv-state"><i class="dot"></i>…</span></h2>
+        <div class="reactor" id="reactor">
+          <div class="top"><span class="rstate" id="r-state">checking</span><span id="r-count"></span></div>
+          <div class="cells" id="r-cells"></div>
+          <div class="power admin-only">
+            <button class="fire sm go" data-act="start"><i></i>Start</button>
+            <button class="fire sm stop" data-act="stop"><i></i>Stop</button>
+            <button class="fire sm" data-act="restart"><i></i>Restart</button>
+            <button class="fire sm" data-act="update"><i></i>Update</button>
+          </div>
+          <div class="fine"><b>Start</b> runs <code>docker compose up -d</code>. <b>Restart</b> recreates the containers so changed settings take effect. <b>Update</b> pulls the newest lancache images, then starts.</div>
+          <p class="ro-note fine">You are a viewer, so the controls are hidden.</p>
+        </div>
+        <div class="hosts" id="ctrs" style="margin-top:14px"></div>
+      </section>
+      <section class="card">
+        <h2>Output <span class="spacer"></span><span class="sub" id="job-title"></span></h2>
+        <div class="console jobout" id="job-out"><div class="note">Output from Start / Stop / Update appears here.</div></div>
+      </section>
+      <section class="card">
+        <h2>DNS test <span class="spacer"></span><button class="btn" id="dns-run">Run test</button></h2>
+        <p class="sub" style="margin-top:0">Asks the lancache DNS server directly. Game download names should point at the cache, everything else at the real internet.</p>
+        <div class="hrow" style="margin-bottom:10px"><input type="text" id="dns-name" placeholder="Also test a name, e.g. cache5-ord1.steamcontent.com" style="flex:1"></div>
+        <div class="tbl" id="dns-out"></div>
+      </section>
+    </div>
+    <div class="stack">
+      <section class="card">
+        <h2>Pre-flight checklist <span class="spacer"></span><button class="btn ghost" id="pf-run">Re-check</button></h2>
+        <div class="checks" id="checks"></div>
+      </section>
+      <section class="card">
+        <h2>Startup</h2>
+        <label class="toggle"><input type="checkbox" id="autostart"><span>Start the cache containers when the machine boots</span></label>
+        <p class="sub">Same as <code>enable_autostart.sh</code>. Only turn it on once the cache works.</p>
+      </section>
+      <section class="card">
+        <h2>Images</h2>
+        <div class="tbl" id="images"></div>
+      </section>
+    </div>
+  </div>
+</main>
+
+<!-- ---------- CONFIG ---------- -->
+<main class="page" data-page="config" hidden>
+  <div class="cols">
+    <section class="card">
+      <h2>Cache settings <span class="sub" style="text-transform:none;letter-spacing:0" id="env-path"></span><span class="spacer"></span>
+        <div class="subtabs" id="cfg-mode"><button data-m="form" class="act">Form</button><button data-m="env">.env file</button><button data-m="compose">docker-compose.yml</button></div></h2>
+      <p class="ro-note sub">Read-only: viewers can look at settings but not change them.</p>
+      <div id="cfg-form">
+        <div class="hrow" style="margin-bottom:6px"><input type="search" id="cfg-search" placeholder="Find a setting…" style="flex:1"></div>
+        <div id="env-fields"></div>
+        <div class="admin-only" style="margin-top:10px"><button class="btn ghost" id="env-add">+ Add a setting</button></div>
+      </div>
+      <div id="cfg-raw" hidden>
+        <textarea id="raw-text" rows="28" spellcheck="false"></textarea>
+      </div>
+      <div class="savebar admin-only">
+        <button class="btn primary" id="cfg-save" disabled>Save</button>
+        <button class="btn" id="cfg-save-restart" disabled>Save and restart cache</button>
+        <button class="btn ghost" id="cfg-revert" disabled>Undo changes</button>
+        <span class="sub" id="cfg-msg"></span>
+      </div>
+    </section>
+    <div class="stack">
+      <section class="card">
+        <h2>This machine</h2>
+        <div class="sub" style="margin-bottom:8px">Addresses right now. Click one to use it for <code>LANCACHE_IP</code> and <code>DNS_BIND_IP</code>.</div>
+        <div class="hrow" id="host-ips"></div>
+        <p class="sub" style="margin-bottom:0">Point players' DNS (the DHCP DNS server option) at <code>DNS_BIND_IP</code>.</p>
+      </section>
+      <section class="card">
+        <h2>Venue profiles</h2>
+        <p class="sub" style="margin-top:0">Save all settings for a venue, then load them at the next event in one click.</p>
+        <div class="checks" id="profiles"></div>
+        <div class="hrow admin-only" style="margin-top:10px"><input type="text" id="prof-name" placeholder="Name, e.g. Civic Center Hall B" style="flex:1"><button class="btn" id="prof-save">Save current</button></div>
+      </section>
+      <section class="card">
+        <h2>Backups <span class="spacer"></span><span class="sub">every save makes one</span></h2>
+        <div class="tbl" id="backups" style="max-height:300px"></div>
+      </section>
+      <section class="card">
+        <h2>Web GUI settings</h2>
+        <div class="form">
+          <label class="f">Event name<input type="text" id="set-event"></label>
+          <label class="f">Count a client as downloading for (seconds after its last request)<input type="number" id="set-window" min="10" max="900"></label>
+          <div class="hrow admin-only"><button class="btn" id="set-save">Save</button><button class="btn ghost" id="cert-regen">New HTTPS certificate</button><button class="btn ghost" id="stats-reset">Reset statistics</button></div>
+          <div class="sub" id="paths"></div>
+        </div>
+      </section>
+    </div>
+  </div>
+</main>
+
+<!-- ---------- USERS ---------- -->
+<main class="page" data-page="users" hidden>
+  <div class="cols">
+    <div class="stack">
+      <section class="card admin-only">
+        <h2>Users <span class="spacer"></span><button class="btn" id="user-add">Add user</button></h2>
+        <div class="tbl" id="users"></div>
+        <p class="sub"><b>admin</b> can change settings, start and stop the cache, and manage users. <b>viewer</b> can see everything but change nothing.</p>
+      </section>
+      <section class="card admin-only">
+        <h2>Activity log</h2>
+        <div class="tbl" id="audit" style="max-height:520px"></div>
+      </section>
+      <section class="card ro-note">
+        <h2>Your access</h2>
+        <p class="sub">You're a <b>viewer</b>: you can see every tab, but only admins can change settings or control the server.</p>
+      </section>
+    </div>
+    <section class="card">
+      <h2>Change your password</h2>
+      <form class="form" id="pw-form">
+        <label class="f">Current password<input type="password" name="current" autocomplete="current-password" required></label>
+        <label class="f">New password (8+ characters)<input type="password" name="new" autocomplete="new-password" minlength="8" required></label>
+        <label class="f">New password again<input type="password" name="again" autocomplete="new-password" minlength="8" required></label>
+        <button class="btn primary" type="submit">Change password</button>
+      </form>
+    </section>
+  </div>
+</main>
+</div>
+
+<dialog id="dlg"><form method="dialog" id="dlg-form"><h3 id="dlg-title"></h3><div id="dlg-body" class="form"></div>
+  <div class="acts"><button class="btn" value="cancel" formnovalidate>Cancel</button><button class="btn primary" value="ok" id="dlg-ok">OK</button></div></form></dialog>
+<div id="tip" hidden></div>
+<div class="toast" id="toast"></div>
+<script src="app.js"></script>
+</body>
+</html>

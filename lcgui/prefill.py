@@ -1,0 +1,277 @@
+"""Preload games into the cache with SteamPrefill (https://github.com/tpill90/steam-lancache-prefill).
+
+SteamPrefill runs on this machine; it finds the cache through 'localhost' and downloads the selected
+apps through it, so the next player gets them at LAN speed. It only downloads when Steam has a newer
+build than the last successful preload, so pressing the button often is cheap.
+
+SteamPrefill asks for a Steam login (and a Steam Guard code) on its first run. It runs in a pseudo
+terminal here, and prompts are passed to the browser, so the login can be done from the web page.
+"""
+import json
+import os
+import platform
+import pty
+import re
+import select
+import shutil
+import signal
+import subprocess
+import threading
+import time
+import urllib.request
+import zipfile
+
+from .util import audit, data_path, load_json, save_json, settings
+
+TOOL_DIR = os.path.dirname(data_path("steamprefill", "x"))
+BIN = os.path.join(TOOL_DIR, "SteamPrefill")
+CONFIG_DIR = os.path.join(TOOL_DIR, "Config")
+STATE_FILE = data_path("prefill_state.json")
+RELEASES = "https://api.github.com/repos/tpill90/steam-lancache-prefill/releases/latest"
+ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(\x07|\x1b\\)|\x1b[()][A-Z0-9]|[\x00-\x08\x0b\x0c\x0e-\x1f]")
+DEFAULT_APPS = [730]   # Counter-Strike 2
+
+_lock = threading.Lock()
+_job = None            # the running / last preload
+_latest = {}           # appid -> {buildid, timeupdated, checked}
+
+
+def _state():
+    return load_json(STATE_FILE, {})
+
+
+def _save_state(patch):
+    s = _state()
+    s.update(patch)
+    save_json(STATE_FILE, s)
+
+
+def apps():
+    return [int(a) for a in settings().get("prefill_apps", DEFAULT_APPS)]
+
+
+def installed():
+    return os.path.isfile(BIN) and os.access(BIN, os.X_OK)
+
+
+def version():
+    return _state().get("tool_version")
+
+
+def logged_in():
+    return os.path.isfile(os.path.join(CONFIG_DIR, "account.config"))
+
+
+def install(user="system"):
+    """Download (or update) SteamPrefill for this CPU. Returns the version string."""
+    arch = {"x86_64": "linux-x64", "amd64": "linux-x64", "aarch64": "linux-arm64", "arm64": "linux-arm64"}.get(platform.machine().lower())
+    if not arch:
+        raise RuntimeError(f"No SteamPrefill build for {platform.machine()}")
+    req = urllib.request.Request(RELEASES, headers={"User-Agent": "lancache-gooey", "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        rel = json.load(r)
+    asset = next((a for a in rel["assets"] if a["name"].endswith(arch + ".zip")), None)
+    if not asset:
+        raise RuntimeError(f"Release {rel.get('tag_name')} has no {arch} download")
+    tmp = os.path.join(TOOL_DIR, "download.zip")
+    with urllib.request.urlopen(urllib.request.Request(asset["browser_download_url"], headers={"User-Agent": "lancache-gooey"}), timeout=120) as r, open(tmp, "wb") as f:
+        shutil.copyfileobj(r, f)
+    with zipfile.ZipFile(tmp) as z:
+        for m in z.infolist():
+            # Extract only plain files inside TOOL_DIR, keeping our Config folder (the Steam login lives there).
+            name = os.path.normpath(m.filename)
+            if name.startswith("..") or os.path.isabs(name) or m.is_dir():
+                continue
+            parts = name.split(os.sep)
+            if len(parts) > 1 and parts[0].lower().startswith("steamprefill"):
+                name = os.path.join(*parts[1:])   # zips may wrap everything in one folder
+            dest = os.path.join(TOOL_DIR, name)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with z.open(m) as src, open(dest, "wb") as out:
+                shutil.copyfileobj(src, out)
+    os.remove(tmp)
+    os.chmod(BIN, 0o755)
+    _save_state({"tool_version": rel.get("tag_name"), "tool_installed": time.time()})
+    audit(user, "prefill-tool-installed", rel.get("tag_name"))
+    return rel.get("tag_name")
+
+
+def write_selection():
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    with open(os.path.join(CONFIG_DIR, "selectedAppsToPrefill.json"), "w") as f:
+        json.dump(apps(), f)
+
+
+# ---------- latest build on Steam ----------
+def check_latest():
+    """Ask the Steam API for each app's current public build. Needs internet."""
+    from . import games
+    out = {}
+    for a in apps():
+        try:
+            info = games._app_info(a) or {}
+            pub = ((info.get("depots") or {}).get("branches") or {}).get("public") or {}
+            out[a] = {"buildid": pub.get("buildid"), "timeupdated": int(pub["timeupdated"]) if pub.get("timeupdated") else None,
+                      "name": (info.get("common") or {}).get("name") or games.app_name(a), "checked": time.time()}
+        except Exception as e:  # noqa: BLE001 - offline
+            out[a] = dict(_latest.get(a, {}), error=str(e)[:200], checked=time.time())
+    _latest.update(out)
+    return out
+
+
+def update_available():
+    done = _state().get("builds", {})
+    return [a for a, v in _latest.items() if v.get("buildid") and done.get(str(a)) != v.get("buildid")]
+
+
+def status():
+    s = _state()
+    j = _job
+    return {"installed": installed(), "version": s.get("tool_version"), "logged_in": logged_in(), "apps": apps(),
+            "latest": {str(k): v for k, v in _latest.items()}, "builds": s.get("builds", {}), "last_run": s.get("last_run"),
+            "update_available": update_available(), "auto": settings().get("prefill_auto", False),
+            "os": settings().get("prefill_os", "windows"), "job": job_info(j) if j else None}
+
+
+# ---------- running SteamPrefill in a pseudo terminal ----------
+class Job:
+    def __init__(self, args, user, auto=False):
+        self.args, self.user, self.auto = args, user, auto
+        self.started, self.ended, self.code = time.time(), None, None
+        self.lines, self.partial, self.prompt, self.secret = [], "", None, False
+        self.builds_at_start = {a: v.get("buildid") for a, v in _latest.items()}
+        self.lock = threading.Lock()
+        pid, fd = pty.fork()
+        if pid == 0:   # child
+            os.chdir(TOOL_DIR)
+            os.environ.update(TERM="dumb", COLUMNS="140", LINES="40", DOTNET_SYSTEM_GLOBALIZATION_INVARIANT="1")
+            try:
+                os.execv(BIN, [BIN] + args)
+            finally:
+                os._exit(127)
+        self.pid, self.fd = pid, fd
+        threading.Thread(target=self._read, daemon=True).start()
+
+    def _add(self, text):
+        parts = text.split("\n")
+        with self.lock:
+            parts[0] = self.partial + parts[0]
+            for ln in parts[:-1]:
+                ln = ln.split("\r")[-1].rstrip()   # progress bars redraw with \r: keep the final state
+                if ln.strip():
+                    self.lines.append(ln)
+            self.partial = parts[-1]
+            if len(self.lines) > 5000:
+                del self.lines[:1000]
+
+    def _read(self):
+        last = time.time()
+        while True:
+            r, _, _ = select.select([self.fd], [], [], 0.5)
+            if r:
+                try:
+                    data = os.read(self.fd, 65536)
+                except OSError:
+                    break
+                if not data:
+                    break
+                self._add(ANSI_RE.sub("", data.decode("utf-8", "replace")))
+                last = time.time()
+                with self.lock:
+                    self.prompt = None
+            elif time.time() - last > 0.8:
+                # Output stopped mid-line ending in ':' -> it's waiting for typed input.
+                with self.lock:
+                    p = self.partial.split("\r")[-1].strip()
+                    if p.endswith(":") and self.prompt is None:
+                        self.prompt = p
+                        self.secret = "password" in p.lower()
+                    stop_now = self.prompt is not None and self.auto
+                    if stop_now:
+                        self.lines.append("Automatic preload needs a Steam login. Run Preload by hand once to log in.")
+                if stop_now:
+                    threading.Thread(target=self.stop, daemon=True).start()
+        _, st = os.waitpid(self.pid, 0)
+        self.code = os.waitstatus_to_exitcode(st)
+        with self.lock:
+            if self.partial.strip():
+                self.lines.append(self.partial.split("\r")[-1].rstrip())
+            self.partial, self.prompt = "", None
+        self.ended = time.time()
+        os.close(self.fd)
+        tail = " ".join(self.lines[-20:]).lower()
+        ok = self.code == 0 and not any(w in tail for w in ("unable to detect lancache", "exception", "error!", "failed"))
+        st = _state()
+        builds = st.get("builds", {})
+        if ok:
+            for a, b in self.builds_at_start.items():
+                if b:
+                    builds[str(a)] = b
+        _save_state({"builds": builds, "last_run": {"t": self.ended, "ok": ok, "code": self.code, "user": self.user,
+                                                     "force": "--force" in self.args, "auto": self.auto}})
+        audit(self.user, "prefill-finished", f"exit {self.code}{' ok' if ok else ' FAILED'}")
+
+    def send(self, text):
+        if self.ended:
+            raise RuntimeError("Preload is not running")
+        with self.lock:
+            self.lines.append((self.prompt or "") + " " + ("•" * 8 if self.secret else text))
+            self.partial, self.prompt = "", None
+        os.write(self.fd, text.encode() + b"\r")
+
+    def stop(self):
+        if not self.ended:
+            with self.lock:
+                self.lines.append("— stopped —")
+            try:
+                os.kill(self.pid, signal.SIGINT)
+                time.sleep(1.5)
+                if not self.ended:
+                    os.kill(self.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+def job_info(j, since=0):
+    with j.lock:
+        return {"running": j.ended is None, "started": j.started, "ended": j.ended, "code": j.code, "auto": j.auto,
+                "force": "--force" in j.args, "lines": j.lines[since:], "n": len(j.lines),
+                "partial": j.partial.split("\r")[-1][-300:], "prompt": j.prompt, "secret": j.secret}
+
+
+def start(user, force=False, auto=False):
+    global _job
+    with _lock:
+        if _job and _job.ended is None:
+            raise RuntimeError("A preload is already running.")
+        if not installed():
+            raise RuntimeError("SteamPrefill isn't downloaded yet. Press 'Download SteamPrefill' first.")
+        write_selection()
+        if not _latest:
+            check_latest()
+        args = ["prefill", "--no-ansi", "--unit", "bits", "--os", settings().get("prefill_os", "windows")]
+        if force:
+            args.append("--force")
+        _job = Job(args, user, auto)
+    audit(user, "prefill-started", ("forced " if force else "") + ("auto" if auto else ""))
+    return job_info(_job)
+
+
+def current():
+    return _job
+
+
+def watcher(cache_running):
+    """Background: check Steam for new builds every 10 minutes; auto-preload when switched on."""
+    def loop():
+        time.sleep(20)
+        while True:
+            try:
+                check_latest()
+                if (settings().get("prefill_auto") and update_available() and installed() and logged_in()
+                        and not (_job and _job.ended is None) and cache_running()):
+                    start("auto", auto=True)
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(600)
+    threading.Thread(target=loop, daemon=True, name="prefill-watch").start()
