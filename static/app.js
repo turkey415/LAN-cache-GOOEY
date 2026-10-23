@@ -781,11 +781,22 @@ async function loadPreload(first) {
 }
 async function pfStart(force) {
   if (force && !await confirmBox('Force a full download?', 'Downloads every file of the game again even if the cache has it. Only needed if the cache was wiped.', 'Download everything')) return;
+  let login = {};
+  if (!PF.st || !PF.st.logged_in) {
+    // SteamPrefill only waits 30 s for each of these, so collect them first and the server answers at once.
+    const f = await ask({ title: 'Log in to Steam for the preload', ok: 'Log in and preload', html: `
+      <p class="sub" style="margin:0">Use an account that has CS2 in its library. This is only needed once: SteamPrefill remembers the login. The password is passed straight to SteamPrefill and never saved.</p>
+      <label class="f">Steam account name<input type="text" name="u" autocomplete="username" required></label>
+      <label class="f">Password<input type="password" name="p" autocomplete="current-password" required></label>
+      <p class="sub" style="margin:0">Steam may then ask you to approve the sign-in in the Steam app on your phone, or for a Steam Guard code. Watch this page.</p>` });
+    if (!f) return;
+    login = { steam_user: f.get('u'), steam_password: f.get('p') };
+  }
   if (!PF.st || !PF.st.installed) { toast('Downloading SteamPrefill first…'); $('#pf-go').disabled = true; }
-  try { await api('POST', '/api/prefill/start', { force }); PF.n = 0; await loadPreload(true); }
+  try { await api('POST', '/api/prefill/start', { force, ...login }); PF.n = 0; await loadPreload(true); }
   catch (e) {
     if (e.status === 409 && /isn't running/.test(e.message) && await confirmBox('Cache is not running', esc(e.message), 'Run anyway')) {
-      try { await api('POST', '/api/prefill/start', { force, anyway: true }); await loadPreload(true); } catch (e2) { toast(e2.message, 'bad'); }
+      try { await api('POST', '/api/prefill/start', { force, anyway: true, ...login }); await loadPreload(true); } catch (e2) { toast(e2.message, 'bad'); }
     } else toast(e.message, 'bad');
   }
 }

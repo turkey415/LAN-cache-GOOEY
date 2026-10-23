@@ -136,8 +136,12 @@ def status():
 
 # ---------- running SteamPrefill in a pseudo terminal ----------
 class Job:
-    def __init__(self, args, user, auto=False):
+    def __init__(self, args, user, auto=False, answers=None):
         self.args, self.user, self.auto = args, user, auto
+        # Steam username/password typed into the GUI before the run. SteamPrefill gives up on its own
+        # username and password prompts after 30 seconds, so these are answered at once. Kept in memory
+        # only until used; never written anywhere.
+        self.answers = dict(answers or {})
         self.started, self.ended, self.code = time.time(), None, None
         self.lines, self.partial, self.prompt, self.secret = [], "", None, False
         self.builds_at_start = {a: v.get("buildid") for a, v in _latest.items()}
@@ -193,10 +197,21 @@ class Job:
                 # Output stopped mid-line ending in ':' -> it's waiting for typed input.
                 with self.lock:
                     p = self.partial.split("\r")[-1].strip()
+                    auto_answer = None
                     if p.endswith(":") and self.prompt is None:
                         self.prompt = p
                         self.secret = "password" in p.lower()
                         self._log("[waiting for input] " + p)
+                        low = p.lower()
+                        if "account name" in low and self.answers.get("username"):
+                            auto_answer = self.answers.pop("username")
+                        elif "password" in low and "invalid" not in low and self.answers.get("password"):
+                            auto_answer = self.answers.pop("password")
+                if auto_answer is not None:
+                    self.send(auto_answer)
+                    last = time.time()
+                    continue
+                with self.lock:
                     stop_now = self.prompt is not None and self.auto
                     if stop_now:
                         self.lines.append("Automatic preload needs a Steam login. Run Preload by hand once to log in.")
@@ -207,7 +222,9 @@ class Job:
         with self.lock:
             if self.partial.strip():
                 self.lines.append(self.partial.split("\r")[-1].rstrip())
+                self._log(self.partial.split("\r")[-1].rstrip())
             self.partial, self.prompt = "", None
+            self.answers.clear()
         self.ended = time.time()
         os.close(self.fd)
         self._log(f"[exit {self.code}]")
@@ -263,7 +280,7 @@ def job_info(j, since=0):
                 "partial": j.partial.split("\r")[-1][-300:], "prompt": j.prompt, "secret": j.secret}
 
 
-def start(user, force=False, auto=False):
+def start(user, force=False, auto=False, answers=None):
     global _job
     with _lock:
         if _job and _job.ended is None:
@@ -276,7 +293,7 @@ def start(user, force=False, auto=False):
         args = ["prefill", "--no-ansi", "--unit", "bits", "--os", settings().get("prefill_os", "windows")]
         if force:
             args.append("--force")
-        _job = Job(args, user, auto)
+        _job = Job(args, user, auto, answers)
     audit(user, "prefill-started", ("forced " if force else "") + ("auto" if auto else ""))
     return job_info(_job)
 

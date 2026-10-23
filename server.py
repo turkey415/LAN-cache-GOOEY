@@ -585,8 +585,11 @@ def r_prefill_start(h, body):
             prefill.install(h.sess["user"])
         except Exception as e:  # noqa: BLE001
             raise HttpError(502, f"Could not download SteamPrefill (needs internet once): {e}")
+    answers = {}
+    if body.get("steam_user"):
+        answers = {"username": str(body["steam_user"])[:64], "password": str(body.get("steam_password", ""))[:128]}
     try:
-        return prefill.start(h.sess["user"], force=bool(body.get("force")))
+        return prefill.start(h.sess["user"], force=bool(body.get("force")), answers=answers)
     except RuntimeError as e:
         raise HttpError(409, str(e))
 
