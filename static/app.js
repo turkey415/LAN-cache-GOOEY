@@ -703,7 +703,7 @@ $('#dns-run').onclick = async () => {
   try {
     const n = $('#dns-name').value.trim();
     const r = await api('GET', '/api/tools/dns' + (n ? '?name=' + encodeURIComponent(n) : ''));
-    $('#dns-out').innerHTML = `<p class="sub">Asked ${esc(r.server)} · cache IPs ${esc(r.cache_ips.join(', '))}</p><table><tr><th class="l">Name</th><th class="l">Service</th><th class="l">Answer</th><th>Result</th></tr>${r.results.map(x =>
+    $('#dns-out').innerHTML = `<p class="sub">DNS server ${esc(r.server)} · cache IPs ${esc(r.cache_ips.join(', '))} · ${esc(r.method)}</p><table><tr><th class="l">Name</th><th class="l">Service</th><th class="l">Answer</th><th>Result</th></tr>${r.results.map(x =>
       `<tr class="dnsrow"><td class="l">${esc(x.name)}</td><td class="l">${esc(x.service)}</td><td class="l mono">${esc(x.error || x.ips.join(', ') || '—')}</td><td><span class="src ${x.ok ? 'cache' : 'internet'}"><i></i>${x.ok ? 'OK' : 'PROBLEM'}</span></td></tr>`).join('')}</table>`;
   } catch (e) { $('#dns-out').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 };
@@ -1080,6 +1080,55 @@ document.addEventListener('click', async e => {
   if (fo && await confirmBox('Use this folder for the cache?', `CACHE_ROOT becomes <code>${esc(fo.dataset.stfolder)}</code> (game data in <code>${esc(fo.dataset.stfolder)}/cache</code>). Nothing is erased. Restart the cache afterwards.`, 'Use it')) {
     try { const r = await api('POST', '/api/storage/use-folder', { path: fo.dataset.stfolder }); toast('Saved: ' + Object.entries(r.env).map(([k, v]) => k + '=' + v).join(', '), 'good'); loadConfig(); } catch (err) { toast(err.message, 'bad'); }
   }
+});
+
+// ================================================================ ARM / DISARM RESTART SWITCHES
+const ARMS = [
+  { id: 'cache', title: 'Restart cache', label: 'RESTART', desc: 'Recreates the cache and DNS containers so changed settings take effect. Downloads in progress pause for a few seconds.' },
+  { id: 'gui', title: 'Restart web GUI', label: 'RESTART', desc: 'Restarts this control panel. The page reconnects by itself in a few seconds. The cache keeps running.' },
+  { id: 'reboot', title: 'Reboot machine', label: 'REBOOT', desc: 'Restarts the whole computer. The cache is down for a minute or two; it comes back by itself if start-on-boot is on.' },
+];
+$('#arms').innerHTML = ARMS.map(a => `<div class="arm" data-armid="${a.id}">
+  <div><div class="t"><b>${a.title}</b><div class="lamp2" title="Armed"><i></i><span>ARMED</span></div></div><div class="sub">${a.desc}</div></div>
+  <div class="guard"><button class="redbtn" disabled aria-label="${a.title}">${a.label}</button><button class="cover" aria-label="Lift the cover to arm: ${a.title}"><span>LIFT TO ARM</span></button></div></div>`).join('');
+const armTimers = {};
+function setArmed(el, on) {
+  el.classList.toggle('armed', on);
+  $('.lamp2', el).className = 'lamp2' + (on ? ' on blink' : '');
+  $('.redbtn', el).disabled = !on;
+  clearTimeout(armTimers[el.dataset.armid]);
+  if (on) armTimers[el.dataset.armid] = setTimeout(() => setArmed(el, false), 10000);   // drops the cover again
+}
+async function waitForGui(msg, maxSec) {
+  toast(msg);
+  const end = Date.now() + maxSec * 1000;
+  await new Promise(r => setTimeout(r, 3000));
+  while (Date.now() < end) {
+    try { const r = await fetch('/api/me', { credentials: 'same-origin' }); if (r.status === 200 || r.status === 401) { location.reload(); return; } } catch (e) { /* still down */ }
+    await new Promise(r => setTimeout(r, 2000));
+  }
+  toast('Still not back. Reload the page in a minute.', 'bad');
+}
+$('#arms').addEventListener('click', async e => {
+  const el = e.target.closest('.arm'); if (!el) return;
+  if (!isAdmin()) return toast('Viewers can look but not change anything.', 'bad');
+  if (e.target.closest('.cover')) return setArmed(el, true);
+  if (!e.target.closest('.redbtn') || !el.classList.contains('armed')) return;
+  const id = el.dataset.armid;
+  setArmed(el, false);
+  try {
+    if (id === 'cache') {
+      const r = await api('POST', '/api/server/action', { action: 'restart' });
+      toast('Restarting the cache. Output is on the Service tab.', 'good');
+      followJob(r.job, 'restart');
+    } else if (id === 'gui') {
+      await api('POST', '/api/gui/restart', {});
+      waitForGui('Restarting the web GUI…', 60);
+    } else if (id === 'reboot') {
+      await api('POST', '/api/system/reboot', {});
+      waitForGui('Rebooting the machine. This page reconnects when it is back.', 600);
+    }
+  } catch (err) { toast(err.message, 'bad'); }
 });
 
 // ================================================================ USERS

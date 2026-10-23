@@ -531,6 +531,27 @@ def r_storage_folder(h, body):
     return {"ok": True, "backup": b, "env": vals}
 
 
+# ---------------------------------------------------------------- restart / reboot (arm-disarm switches)
+@route("POST", "/api/gui/restart", role="admin")
+def r_gui_restart(h, body):
+    if not os.environ.get("INVOCATION_ID"):
+        raise HttpError(409, "The GUI isn't running as the lancache-gui service, so nothing would start it again. Run sudo ./webgui/install.sh.")
+    audit(h.sess["user"], "gui-restart")
+    # Answer first, then exit; systemd (Restart=always) starts it again.
+    threading.Timer(0.8, lambda: os._exit(0)).start()
+    return {"ok": True}
+
+
+@route("POST", "/api/system/reboot", role="admin")
+def r_reboot(h, body):
+    try:
+        out = storage.reboot(h.sess["user"])
+    except ValueError as e:
+        raise HttpError(409, str(e))
+    audit(h.sess["user"], "machine-reboot")
+    return {"ok": True, "out": out}
+
+
 # ---------------------------------------------------------------- preload (SteamPrefill)
 @route("GET", "/api/prefill")
 def r_prefill(h, q):

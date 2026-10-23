@@ -26,6 +26,7 @@ Usage:
   lancache-gooey-disk plan  grow --target root|cache --size GIB
   lancache-gooey-disk apply ... --confirm TEXT     (TEXT is the 'confirm' value from plan)
   lancache-gooey-disk version
+  lancache-gooey-disk reboot --confirm reboot      (restart the machine)
 """
 import argparse
 import json
@@ -35,7 +36,7 @@ import subprocess
 import sys
 import time
 
-VERSION = "2"
+VERSION = "3"
 SYS_LV = "lancache"          # cache volume name inside the system VG
 RESERVE_GIB = 20             # always leave this much free in the system VG
 VG, LV = "lancache", "cache"
@@ -342,7 +343,7 @@ def apply(p):
 
 def main():
     ap = argparse.ArgumentParser(description="LAN Cache GOOEY disk helper")
-    ap.add_argument("command", choices=["scan", "plan", "apply", "version"])
+    ap.add_argument("command", choices=["scan", "plan", "apply", "version", "reboot"])
     ap.add_argument("action", nargs="?")
     ap.add_argument("devices", nargs="*")
     ap.add_argument("--fs", default="ext4")
@@ -353,6 +354,14 @@ def main():
     try:
         if a.command == "version":
             print(VERSION)
+            return 0
+        if a.command == "reboot":
+            if os.geteuid() != 0:
+                raise Refused("reboot must run as root")
+            if a.confirm != "reboot":
+                raise Refused("--confirm must be exactly: reboot")
+            print("Rebooting in 3 seconds…", flush=True)
+            subprocess.Popen(["sh", "-c", "sleep 3; systemctl reboot"], start_new_session=True)
             return 0
         if a.command == "scan":
             print(json.dumps(scan()))

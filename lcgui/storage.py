@@ -3,6 +3,7 @@ import hashlib
 import json
 import math
 import os
+import time
 
 from . import config, docker
 from .util import GUI_DIR, run
@@ -32,7 +33,18 @@ def _sha(path):
         return None
 
 
-def helper_state():
+_hs = {"t": 0, "v": None}
+
+
+def helper_state(fresh=False):
+    """Cached for 30 s: each check runs sudo, which writes to the system log."""
+    if not fresh and _hs["v"] and time.time() - _hs["t"] < 30:
+        return _hs["v"]
+    _hs["v"], _hs["t"] = _helper_state(), time.time()
+    return _hs["v"]
+
+
+def _helper_state():
     installed = os.path.exists(HELPER_BIN)
     current = installed and _sha(HELPER_BIN) == _sha(HELPER_SRC)
     sudo_ok = False
@@ -81,8 +93,18 @@ def sizes_for(total_bytes):
     return {"CACHE_DISK_SIZE": f"{disk}g", "CACHE_INDEX_SIZE": f"{index}m"}
 
 
+def reboot(user):
+    h = helper_state(fresh=True)
+    if not h["ok"]:
+        raise ValueError(h["message"])
+    code, out = run(["sudo", "-n", HELPER_BIN, "reboot", "--confirm", "reboot"], timeout=15)
+    if code != 0:
+        raise ValueError(out.strip()[-300:] or "reboot failed")
+    return out.strip()
+
+
 def apply(action, devices, fs, confirm, user, size=0, target=None):
-    h = helper_state()
+    h = helper_state(fresh=True)
     if not h["ok"]:
         raise ValueError(h["message"])
     p = plan(action, devices, fs, size, target)

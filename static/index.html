@@ -260,8 +260,8 @@
       </section>
       <section class="card">
         <h2>DNS test <span class="spacer"></span><button class="btn" id="dns-run">Run test</button></h2>
-        <p class="sub" style="margin-top:0">Asks the lancache DNS server directly. Game download names should point at the cache, everything else at the real internet.</p>
-        <div class="hrow" style="margin-bottom:10px"><input type="text" id="dns-name" placeholder="Also test a name, e.g. cache5-ord1.steamcontent.com" style="flex:1"></div>
+        <p class="sub" style="margin-top:0">Asks the lancache DNS server the way a player&rsquo;s machine is answered. Game download names should point at the cache, everything else at the real internet. (This machine itself always gets the real internet answers, on purpose.)</p>
+        <div class="hrow" style="margin-bottom:10px"><input type="text" id="dns-name" placeholder="Also test a name, e.g. lancache.steamcontent.com" style="flex:1"></div>
         <div class="tbl" id="dns-out"></div>
       </section>
     </div>
@@ -321,6 +321,11 @@
       <section class="card">
         <h2>Backups <span class="spacer"></span><span class="sub">every save makes one</span></h2>
         <div class="tbl" id="backups" style="max-height:300px"></div>
+      </section>
+      <section class="card">
+        <h2>Restart controls <span class="spacer"></span><span class="sub">lift a cover to arm</span></h2>
+        <div class="arms" id="arms"></div>
+        <p class="ro-note sub">Only admins can use these.</p>
       </section>
       <section class="card">
         <h2>Web GUI settings</h2>

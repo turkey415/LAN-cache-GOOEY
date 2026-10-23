@@ -10,11 +10,10 @@ from .util import host_ips, run
 
 DNS_TESTS = [
     ("Steam", "lancache.steamcontent.com", True),
-    ("Steam", "cache1-iad1.steamcontent.com", True),
-    ("Epic Games", "epicgames-download1.akamaized.net", True),
-    ("Battle.net", "level3.blizzard.com", True),
-    ("Riot", "lol.secure.dyn.riotcdn.net", True),
-    ("Windows Update", "dl.delivery.mp.microsoft.com", True),
+    ("Epic Games", "cdn1.epicgames.com", True),
+    ("Battle.net", "blzddist1-a.akamaihd.net", True),
+    ("Riot", "l3cdn.riotgames.com", True),
+    ("Windows Update", "amupdatedl.microsoft.com", True),
     ("Not cached (upstream)", "www.google.com", False),
 ]
 
@@ -57,6 +56,16 @@ def dns_query(server, name, timeout=2.0):
     return ips
 
 
+def _dig_in_container(name):
+    """Ask the DNS container itself. The lancache DNS deliberately gives the cache machine's own IP the real
+    (internet) answers, so a test sent from this machine would always look wrong. Inside the container we
+    are answered the way an ordinary client is."""
+    code, out = run(["docker", "compose", "exec", "-T", "dns", "dig", "+short", "+time=2", "+tries=1", "@127.0.0.1", name, "A"], timeout=15)
+    if code != 0:
+        raise OSError(out.strip().splitlines()[-1] if out.strip() else "dig failed")
+    return [l for l in out.split() if l.count(".") == 3 and all(p.isdigit() for p in l.split("."))]
+
+
 def dns_check(extra=None):
     env = config.env_dict()
     server = env.get("DNS_BIND_IP", "")
@@ -64,11 +73,13 @@ def dns_check(extra=None):
     tests = list(DNS_TESTS)
     if extra:
         tests.append(("Custom", extra, None))
+    in_container = docker.installed() and any(c["service"] == "dns" and c["state"] == "running" for c in docker.status())
+
     def one(t):
         label, name, cached = t
         r = {"service": label, "name": name, "expect_cache": cached}
         try:
-            ips = dns_query(server, name)
+            ips = _dig_in_container(name) if in_container else dns_query(server, name)
             r["ips"] = ips
             to_cache = bool(ips) and all(ip in cache_ips for ip in ips)
             r["to_cache"] = to_cache
@@ -78,7 +89,9 @@ def dns_check(extra=None):
         return r
     with concurrent.futures.ThreadPoolExecutor(len(tests)) as ex:
         out = list(ex.map(one, tests))
-    return {"server": server, "cache_ips": sorted(cache_ips), "results": out}
+    return {"server": server, "cache_ips": sorted(cache_ips), "results": out,
+            "method": "asked inside the DNS container, as a player's machine would be answered" if in_container
+            else "asked from this machine (the DNS container isn't running); note the cache machine itself always gets real internet answers"}
 
 
 def _listening():
