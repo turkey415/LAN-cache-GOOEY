@@ -737,7 +737,7 @@ async function loadPreload(first) {
       <span class="src ${st}"><i></i>${txt}</span></div>`;
   }).join('');
   const re = $('#pf-reactor');
-  re.className = 'reactor ' + (running ? 'firing' : r.update_available.length ? 'armed' : r.last_run && r.last_run.ok ? 'ready' : '');
+  re.className = 'reactor ' + (running ? '' : r.last_run && !r.last_run.ok ? 'firing' : r.update_available.length ? 'armed' : r.last_run && r.last_run.ok ? 'ready' : '');
   const tr = r.traffic || { rate: 0, hit: 0, miss: 0 };
   const flowing = running && tr.rate > 0;
   const pct = pg && pg.fraction != null ? Math.floor(pg.fraction * 100) : null;
