@@ -125,7 +125,7 @@
       <input type="search" id="g-filter" placeholder="Filter…" style="width:200px">
       <select id="g-sort" style="width:auto"><option value="size">Biggest</option><option value="served">Most served</option><option value="recent">Most recent</option><option value="name">Name</option></select></h2>
     <div class="games" id="games"></div>
-    <p class="sub" style="margin:12px 0 0">Size is worked out from the logs: everything fetched from the internet is stored in the cache, so that's the footprint (until old data is pruned).</p>
+    <p class="sub" style="margin:12px 0 0"><b>In cache</b> is everything fetched from the internet for that game, which the cache stored (until old data is pruned). The bar is not download progress: it shows how that game's traffic split between <span style="color:var(--hit)">served from the cache</span> and <span style="color:var(--miss)">fetched from the internet</span>. <b>PRELOADED</b> marks games the Preload tab keeps on the newest build.</p>
   </section>
   <section class="card" id="game-detail" hidden></section>
 </main>

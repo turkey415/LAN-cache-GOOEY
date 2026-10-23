@@ -471,10 +471,18 @@ const G = {
   count: mkCount('#n-gcount', 'Games'), stored: mkCount('#n-stored', 'Fetched from internet'),
   served: mkCount('#n-served', 'Served from cache'), saved: mkCount('#n-saved', 'Hit ratio'),
 };
-let GAMES = [];
+let GAMES = [], PRE = { builds: {}, latest: {} };
+// Badge for games the Preload tab keeps current: preloaded and up to date, or a newer build is out.
+function preBadge(appid) {
+  const have = appid && PRE.builds[appid], latest = appid && PRE.latest[appid];
+  if (!have) return '';
+  return latest && latest !== have ? `<span class="src internet" title="Steam has build ${esc(latest)}; the cache has ${esc(have)}. Preload again."><i></i>UPDATE OUT</span>`
+    : `<span class="src cache" title="Preloaded into the cache"><i></i>PRELOADED · ${esc(have)}</span>`;
+}
+const splitCaption = (hit, miss) => { const t = hit + miss; return t ? `<div class="k" style="display:flex;justify-content:space-between;letter-spacing:.04em;text-transform:none;margin-bottom:4px"><span>${Math.round(100 * hit / t)}% from cache</span><span>${Math.round(100 * miss / t)}% from internet</span></div>` : ''; };
 async function loadGames() {
   const r = await api('GET', '/api/games');
-  GAMES = r.games;
+  GAMES = r.games; PRE = r.preloaded || PRE;
   const lim = sizeBytes(r.limit), used = r.disk.bytes;
   G.cache({ f: lim && used != null ? used / lim : 0, text: used != null ? splitBytes(used)[0] : '--', unit: used != null ? splitBytes(used)[1] : '', scale: r.limit ? 'limit ' + r.limit : '', off: used == null });
   const fu = r.fs.total ? (r.fs.total - r.fs.free) / r.fs.total : 0;
@@ -495,11 +503,11 @@ function renderGames() {
     const sb = splitBytes(g.miss), hb = splitBytes(g.hit);
     return `<div class="game" tabindex="0" data-gid="${esc(g.id)}">
       <div class="art"><span class="ph">${esc((g.name.match(/[A-Z0-9]/g) || ['?']).slice(0, 3).join(''))}</span>${g.appid ? `<img src="/api/cover/${g.appid}" alt="" loading="lazy" data-fallback>` : ''}<span class="svc svcb">${esc(g.service_name)}</span></div>
-      <div class="body"><div class="ttl" title="${esc(g.name)}">${esc(g.name)}</div>
-        <div class="figs"><div class="fig"><span class="k">Size</span>${seg7(sb[0], 4)}<span class="un">${sb[1]}</span></div>
+      <div class="body"><div class="ttl" title="${esc(g.name)}">${esc(g.name)}</div>${preBadge(g.appid) ? `<div>${preBadge(g.appid)}</div>` : ''}
+        <div class="figs"><div class="fig"><span class="k">In cache</span>${seg7(sb[0], 4)}<span class="un">${sb[1]}</span></div>
           <div class="fig"><span class="k">Served</span>${seg7(hb[0], 4)}<span class="un">${hb[1]}</span></div>
           <div class="fig"><span class="k">Clients</span>${seg7(String(g.clients), 4)}<span class="un">machines</span></div></div>
-        ${splitBar(g.hit, g.miss)}
+        <div>${splitCaption(g.hit, g.miss)}${splitBar(g.hit, g.miss)}</div>
         <span class="sub">Last download ${fmtAgo(g.last)}</span></div></div>`;
   }).join('') : '<div class="empty">Nothing in the cache yet. Games show up here after the first machine downloads them through the cache.</div>';
 }
@@ -514,7 +522,7 @@ async function openGame(gid) {
   const box = $('#game-detail'); box.hidden = false;
   box.innerHTML = `<div class="hrow" style="margin-bottom:14px"><button class="btn" id="g-back">← All games</button></div>
     <div class="detail-head">${g.appid ? `<img src="/api/cover/${g.appid}" alt="" data-fallback>` : ''}
-      <div><h1>${esc(g.name)}</h1><div class="sub">${esc(g.service_name)}${g.appid ? ` · Steam app ${g.appid}` : ''}</div>
+      <div><h1>${esc(g.name)}</h1><div class="sub">${esc(g.service_name)}${g.appid ? ` · Steam app ${g.appid}` : ''}</div>${preBadge(g.appid) ? `<div style="margin-top:8px">${preBadge(g.appid)}</div>` : ''}
       <div class="hrow" style="margin-top:12px;gap:22px">
         <div class="fig"><span class="k">Size in cache</span>${seg7(splitBytes(miss)[0], 4)}<span class="un">${splitBytes(miss)[1]}</span></div>
         <div class="fig"><span class="k">Served</span>${seg7(splitBytes(hit)[0], 4)}<span class="un">${splitBytes(hit)[1]}</span></div>

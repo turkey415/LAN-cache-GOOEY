@@ -240,6 +240,10 @@ class Stats:
             self.local_bytes += n
         parts = m["req"].split(" ")
         path = parts[1] if len(parts) > 1 else ""
+        # Health checks (lancache-heartbeat) and requests made to the cache's own address aren't game
+        # downloads; nginx tags the latter with an IP instead of a service name. Keep them out of the stats.
+        if path.startswith("/lancache-heartbeat") or re.fullmatch(r"[\d.]+|[0-9a-fA-F:]+", m["svc"] or ""):
+            return
         gkey = games.identify(m["svc"], m["host"], path)
         sec = int(ts)
         hour = sec - sec % 3600

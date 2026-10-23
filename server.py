@@ -206,8 +206,11 @@ def r_client(h, q, ip):
 @route("GET", "/api/games")
 def r_games(h, q):
     cs = system.SAMPLER.cache_size
+    pst = prefill.status()
     return {"games": logs.games_summary(), "disk": cs, "fs": config.fs_usage(config.cache_root()),
-            "limit": config.env_dict().get("CACHE_DISK_SIZE")}
+            "limit": config.env_dict().get("CACHE_DISK_SIZE"),
+            "preloaded": {"builds": pst["builds"], "latest": {k: v.get("buildid") for k, v in pst["latest"].items()},
+                          "apps": pst["apps"], "last_run": pst["last_run"]}}
 
 
 @route("GET", "/api/games/(?P<gid>[A-Za-z0-9:_./-]+)")
@@ -727,7 +730,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.responded = False
         self.set_cookie = None
         url = urllib.parse.urlsplit(self.path)
-        path = url.path
+        path = urllib.parse.unquote(url.path)   # e.g. /api/games/steam%3A730 -> steam:730
         if not path.startswith("/api/"):
             if self.command not in ("GET", "HEAD"):
                 return self.send_json(405, {"error": "method not allowed"})
