@@ -26,6 +26,7 @@ Usage:
   lancache-gooey-disk plan  grow --target root|cache --size GIB
   lancache-gooey-disk apply ... --confirm TEXT     (TEXT is the 'confirm' value from plan)
   lancache-gooey-disk version
+  lancache-gooey-disk plan  remove                    (unmount and delete the cache volume; works with disks already pulled)
   lancache-gooey-disk reboot --confirm reboot      (restart the machine)
 """
 import argparse
@@ -36,7 +37,7 @@ import subprocess
 import sys
 import time
 
-VERSION = "3"
+VERSION = "4"
 SYS_LV = "lancache"          # cache volume name inside the system VG
 RESERVE_GIB = 20             # always leave this much free in the system VG
 VG, LV = "lancache", "cache"
@@ -178,7 +179,47 @@ def _gib(n):
     return f"{n / 2 ** 30:.0f} GiB"
 
 
-def plan(action, paths, fs, size_gib=0, target=None):
+def _fstab_has_mount():
+    try:
+        with open("/etc/fstab") as f:
+            return any(l.split()[1:2] == [MOUNT] for l in f if l.strip() and not l.lstrip().startswith("#"))
+    except OSError:
+        return False
+
+
+def plan_remove():
+    """Take the cache volume away: unmount, delete the LVM volume, free the disks, clean /etc/fstab.
+    Copes with disks that were already pulled (missing PVs) or a volume that is already gone."""
+    if os.geteuid() != 0:
+        raise Refused("needs root to see the volume groups (is the helper installed? run sudo ./webgui/install.sh)")
+    s = scan()
+    vg_exists = any(v["vg_name"] == VG for v in _report(["vgs", "-o", "vg_name"], "vg"))
+    pvs = [p["pv_name"] for p in _report(["pvs", "-o", "pv_name,vg_name"], "pv") if p.get("vg_name") == VG and p.get("pv_name", "").startswith("/dev/")]
+    info = lvm_info() or {}
+    sys_lv = (info.get("cache_lv") or {}).get("path")
+    if not (vg_exists or sys_lv or s["mounted"] or _fstab_has_mount()):
+        raise Refused("there is no cache volume to remove")
+    steps = []
+    if s["mounted"]:
+        steps.append({"desc": f"Unmount {MOUNT}", "cmd": ["umount", "-l", MOUNT]})
+    if sys_lv:
+        steps.append({"desc": f"Delete the cache volume {sys_lv} (the system volume is not touched)", "cmd": ["lvremove", "-y", sys_lv]})
+    if vg_exists:
+        steps += [{"desc": f"Deactivate volume group '{VG}'", "cmd": ["vgchange", "-an", VG], "may_fail": True},
+                  {"desc": "Forget disks that were already pulled", "cmd": ["vgreduce", "--removemissing", "--force", VG], "may_fail": True},
+                  {"desc": f"Delete volume group '{VG}'", "cmd": ["vgremove", "-ff", "-y", VG]}]
+        if pvs:
+            steps.append({"desc": "Free the disks (" + ", ".join(os.path.basename(p) for p in pvs) + ") so they show as empty", "cmd": ["pvremove", "-ff", "-y"] + pvs, "may_fail": True})
+    steps.append({"desc": f"Remove {MOUNT} from /etc/fstab", "internal": "fstab_remove"})
+    names = sorted({os.path.basename(p) for p in pvs} | {d["name"] for d in s["disks"] if d["status"] == "cache"})
+    return {"action": "remove", "fs": None, "mount": "/", "erase": [], "erase_detail": [], "size": 0, "devices": [], "steps": steps,
+            "layout": [], "env": {}, "confirm": "remove", "env_change": False, "freed": names,
+            "kind": "system" if sys_lv else "disks"}
+
+
+def plan(action, paths, fs, size_gib=0, target=None, assume_removed=False):
+    if action == "remove":
+        return plan_remove()
     if action in ("sysvol", "grow"):
         return plan_lvm(action, fs, size_gib, target)
     if fs not in FORMATS:
@@ -187,9 +228,9 @@ def plan(action, paths, fs, size_gib=0, target=None):
         s, disks = _pick(paths)
         if not disks:
             raise Refused("pick at least one disk")
-        if s["volume_exists"]:
+        if s["volume_exists"] and not assume_removed:
             raise Refused("a cache volume already exists; use 'add' to grow it")
-        if s["mounted"]:
+        if s["mounted"] and not assume_removed:
             raise Refused(f"{MOUNT} is already mounted")
         dp = [d["path"] for d in disks]
         mk = ["mkfs.ext4", "-F", "-L", "lancache", "-m", "0", LVPATH] if fs == "ext4" else ["mkfs.xfs", "-f", "-L", "lancache", LVPATH]
@@ -314,6 +355,24 @@ def _fstab(step):
     print(f"  {line.strip()}")
 
 
+def _fstab_remove(_step):
+    with open("/etc/fstab") as f:
+        old = f.readlines()
+    keep = [l for l in old if l.strip() != "# LAN Cache GOOEY cache volume"
+            and not (l.split() and not l.lstrip().startswith("#") and len(l.split()) > 1 and l.split()[1] == MOUNT)]
+    if keep != old:
+        shutil.copy2("/etc/fstab", "/etc/fstab.lancache-gooey.bak")
+        tmp = "/etc/fstab.lancache-gooey.tmp"
+        with open(tmp, "w") as f:
+            f.writelines(keep)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, "/etc/fstab")
+        subprocess.run(["systemctl", "daemon-reload"], check=False)
+        print(f"  removed {MOUNT} from /etc/fstab (backup /etc/fstab.lancache-gooey.bak)")
+    else:
+        print("  nothing to remove")
+
+
 def _folders(_step):
     for p in (MOUNT, MOUNT + "/cache", MOUNT + "/logs"):
         os.makedirs(p, exist_ok=True)
@@ -333,7 +392,7 @@ def apply(p):
                 print(f"FAILED (exit {r.returncode}). Stopped here; nothing after this step was done.", flush=True)
                 return r.returncode
         else:
-            {"fstab": _fstab, "folders": _folders}[st["internal"]](st)
+            {"fstab": _fstab, "folders": _folders, "fstab_remove": _fstab_remove}[st["internal"]](st)
     where = p.get("mount") or MOUNT
     st = os.statvfs(where)
     print("RESULT " + json.dumps({"mount": where, "total": st.f_blocks * st.f_frsize, "free": st.f_bavail * st.f_frsize}), flush=True)
@@ -350,6 +409,7 @@ def main():
     ap.add_argument("--confirm", default="")
     ap.add_argument("--size", default="0", help="GiB, for sysvol and grow")
     ap.add_argument("--target", default=None, help="root or cache, for grow")
+    ap.add_argument("--assume-removed", action="store_true", help="plan only: preview 'create' as if the cache volume were already removed")
     a = ap.parse_args()
     try:
         if a.command == "version":
@@ -366,7 +426,7 @@ def main():
         if a.command == "scan":
             print(json.dumps(scan()))
             return 0
-        p = plan(a.action, a.devices, a.fs, a.size, a.target)
+        p = plan(a.action, a.devices, a.fs, a.size, a.target, assume_removed=a.assume_removed and a.command == "plan")
         if a.command == "plan":
             print(json.dumps(p))
             return 0

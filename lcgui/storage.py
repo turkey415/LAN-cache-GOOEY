@@ -74,14 +74,25 @@ def status():
     return {"scan": s, "helper": h, "cache": where_cache_is()}
 
 
-def _plan_args(action, devices, fs, size, target):
+def _plan_args(action, devices, fs, size, target, assume_removed=False):
     a = ["plan", action, "--fs", fs, "--size", str(int(size or 0))]
     if target:
         a += ["--target", target]
+    if assume_removed:
+        a.append("--assume-removed")
     return a + list(devices)
 
 
 def plan(action, devices, fs, size=0, target=None):
+    if action == "move":
+        # Remove the current cache volume, then build a new one on the selected disks.
+        rm = _src(_plan_args("remove", [], fs, 0, None))
+        if "error" in rm:
+            return rm
+        mk = _src(_plan_args("create", devices, fs, 0, None, assume_removed=True))
+        if "error" in mk:
+            return mk
+        return {**mk, "action": "move", "remove": rm, "steps": rm["steps"] + mk["steps"], "freed": rm.get("freed", [])}
     return _src(_plan_args(action, devices, fs, size, target))
 
 
@@ -117,6 +128,8 @@ def apply(action, devices, fs, confirm, user, size=0, target=None):
 
     def point_env(job):
         if not p.get("env_change", True):
+            if action == "remove":
+                job["out"].append("The cache stays stopped until it has storage again. Pick disks above, or use free space on the system disk.\n")
             return 0
         st = os.statvfs(p["mount"])
         vals = {"CACHE_ROOT": p["mount"], **sizes_for(st.f_blocks * st.f_frsize)}
@@ -126,9 +139,21 @@ def apply(action, devices, fs, confirm, user, size=0, target=None):
             job["out"].append("The cache wasn't running. Press Start on the Service tab when ready.\n")
         return 0
 
-    args = _plan_args(action, devices, p["fs"] if p.get("fs") in ("ext4", "xfs") else "ext4", size, target)
-    args[0] = "apply"
-    steps = [["sudo", "-n", HELPER_BIN] + args[:-len(devices) or None] + ["--confirm", want] + list(devices), point_env]
+    fs_ok = p["fs"] if p.get("fs") in ("ext4", "xfs") else "ext4"
+
+    def helper_apply(act, devs, confirm_text):
+        a = _plan_args(act, devs, fs_ok, size, target)
+        a[0] = "apply"
+        return ["sudo", "-n", HELPER_BIN] + a[:-len(devs) or None] + ["--confirm", confirm_text] + list(devs)
+
+    steps = []
+    if action in ("remove", "move"):
+        steps.append(["docker", "compose", "stop"])   # nothing may hold files on the volume being removed
+    if action == "move":
+        steps += [helper_apply("remove", [], "remove"), helper_apply("create", devices, want)]
+    else:
+        steps.append(helper_apply(action, devices, want))
+    steps.append(point_env)
     if was_running and p.get("env_change", True):
         steps.append(["docker", "compose", "up", "-d", "--force-recreate", "--remove-orphans"])
     return docker.start_job("storage-" + action, user, steps=steps)

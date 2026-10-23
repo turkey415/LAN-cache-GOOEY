@@ -535,6 +535,8 @@ body.viewer .admin-only { display: none !important; }
 /* storage */
 .disk { display: grid; grid-template-columns: 22px minmax(170px, 1.2fr) 90px minmax(0, 2fr) auto; gap: 14px; align-items: center; padding: 10px 12px; background: var(--well); border: 1px solid rgba(255, 255, 255, .06); border-radius: 8px; }
 .disk.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.disk.leaving { border-color: #ff4d4d; box-shadow: 0 0 0 1px #ff4d4d inset; opacity: .8; }
+#st-apply.danger { background: #c62828; }
 .disk input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--accent); }
 .disk b { font-weight: 600; }
 .disk .k { display: block; text-transform: none; letter-spacing: .05em; overflow: hidden; text-overflow: ellipsis; }

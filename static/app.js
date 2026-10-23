@@ -937,7 +937,7 @@ $('#stats-reset').onclick = async () => {
 window.addEventListener('beforeunload', e => { if (CFG.data && TAB === 'config' && cfgDirty()) e.preventDefault(); });
 
 // ================================================================ STORAGE
-const ST = { data: null, sel: new Set() };
+const ST = { data: null, sel: new Set(), drop: new Set() };   // sel: new disks ticked · drop: in-cache disks unticked
 const STATUS_BADGE = { cache: ['cache', 'IN CACHE'], system: ['idle', 'SYSTEM'], mounted: ['mixed', 'MOUNTED'], busy: ['idle', 'IN USE'], data: ['internet', 'HAS DATA'], empty: ['blue', 'EMPTY'] };
 async function loadStorage() {
   let r;
@@ -951,14 +951,16 @@ async function loadStorage() {
   renderSysPool(sc, r.helper);
   if (sc.error) { $('#st-disks').innerHTML = `<div class="empty">${esc(sc.error)}</div>`; return; }
   ST.sel.forEach(p => { if (!sc.disks.some(d => d.path === p && d.erasable)) ST.sel.delete(p); });
+  ST.drop.forEach(p => { if (!sc.disks.some(d => d.path === p && d.status === 'cache')) ST.drop.delete(p); });
   $('#st-disks').innerHTML = sc.disks.map(d => {
     const [cls, txt] = STATUS_BADGE[d.status] || ['idle', d.status.toUpperCase()];
     const sb = splitBytes(d.size);
     const parts = d.parts.filter(p => p.type === 'part' || p.type === 'lvm').map(p => `${esc(p.name)} ${fmtBytes(p.size)}${p.fstype ? ' ' + esc(p.fstype) : ''}${p.label ? ' “' + esc(p.label) + '”' : ''}${p.mountpoints.length ? ' → ' + esc(p.mountpoints.join(', ')) : ''}`);
     const adopt = isAdmin() && !sc.volume_exists ? d.adoptable.map(p => `<button class="btn ghost" data-adopt="${esc(p.path)}" title="Mount it at /srv/lancache without erasing">Use ${esc(p.name)} as-is</button>`).join('') : '';
     const folder = isAdmin() && d.status === 'mounted' ? d.mountpoints.filter(m => m.startsWith('/') && m !== '/').map(m => `<button class="btn ghost" data-stfolder="${esc(m.replace(/\/$/, '') + '/lancache')}">Use folder ${esc(m)}/lancache</button>`).join('') : '';
-    return `<div class="disk${ST.sel.has(d.path) ? ' sel' : ''}">
-      <input type="checkbox" data-disk="${esc(d.path)}" ${ST.sel.has(d.path) ? 'checked' : ''} ${d.erasable && isAdmin() ? '' : 'disabled'} title="${d.erasable ? 'Select' : esc(d.why)}">
+    const inCache = d.status === 'cache' && sc.cache_kind === 'disks', ticked = inCache ? !ST.drop.has(d.path) : ST.sel.has(d.path);
+    return `<div class="disk${ST.sel.has(d.path) ? ' sel' : ''}${inCache && !ticked ? ' leaving' : ''}">
+      <input type="checkbox" data-disk="${esc(d.path)}" data-incache="${inCache ? 1 : ''}" ${ticked ? 'checked' : ''} ${(d.erasable || inCache) && isAdmin() ? '' : 'disabled'} title="${inCache ? 'In the cache volume. Untick to remove the volume or move the cache.' : d.erasable ? 'Select' : esc(d.why)}">
       <div><b>${esc(d.name)}</b> <span class="sub">${esc(d.kind)}</span><span class="k">${esc(d.model || 'unknown model')}</span></div>
       <div class="size">${seg7(sb[0], 4)}<span class="k">${sb[1]}</span></div>
       <div class="what">${esc(d.why)}${parts.length ? `<span class="k">${parts.join(' · ')}</span>` : ''}${adopt || folder ? `<div class="hrow" style="margin-top:4px">${adopt}${folder}</div>` : ''}</div>
@@ -982,7 +984,7 @@ function renderSysPool(sc, helper) {
       ${cache ? `<span><i style="background:#ff2bd6"></i>Cache volume ${fmtBytes(cache)}</span>` : ''}
       <span><i style="background:#3a3a37"></i>Unused ${fmtBytes(vg.free)} (${fmtBytes(L.reserve)} always kept back)</span></div>
     <div class="neons admin-only">
-      ${onSys ? `<button class="neon pink" data-sysact="grow-cache" ${vg.free >= 2 ** 30 ? '' : 'disabled'}><b>▲</b>Grow cache volume</button>`
+      ${onSys ? `<button class="neon pink" data-sysact="grow-cache" ${vg.free >= 2 ** 30 ? '' : 'disabled'}><b>▲</b>Grow cache volume</button><button class="neon" style="--n:#ff3b3b" data-sysact="remove"><b>✕</b>Remove cache volume</button>`
               : `<button class="neon pink" data-sysact="sysvol" ${canSys ? '' : 'disabled'} title="${sc.volume_exists ? 'A cache volume already exists' : ''}"><b>▼</b>Use free space for the cache</button>`}
       <button class="neon green" data-sysact="grow-root" ${vg.free >= 2 ** 30 ? '' : 'disabled'}><b>▲</b>Grow system volume</button>
     </div>
@@ -1028,10 +1030,26 @@ Unused in the pool ${fmtBytes(p.free_before)} → ${fmtBytes(p.free_after)}</div
     <p class="sub" style="margin:0">${kind === 'grow-root' ? 'Happens while running; nothing restarts.' : 'Nothing existing is erased. If the cache is running it restarts afterwards to use the new space.'}</p>
     <details><summary class="sub" style="cursor:pointer">Commands that will run (${p.steps.length})</summary><ol class="plan">${p.steps.map(s => `<li><span class="d">${esc(s.desc)}</span>${s.cmd ? '<br>' + esc(s.cmd.join(' ')) : ''}</li>`).join('')}</ol></details>`;
 }
-document.addEventListener('click', e => { const b = e.target.closest('[data-sysact]'); if (b && !b.disabled) sysAction(b.dataset.sysact); });
+document.addEventListener('click', e => { const b = e.target.closest('[data-sysact]'); if (b && !b.disabled) b.dataset.sysact === 'remove' ? stApply('remove', []) : sysAction(b.dataset.sysact); });
+function stMode() {
+  const sc = ST.data.scan, dropping = sc.cache_kind === 'disks' && ST.drop.size > 0;
+  return dropping ? (ST.sel.size ? 'move' : 'remove') : sc.volume_exists ? 'add' : 'create';
+}
 function stSel() {
   const sc = ST.data.scan, n = ST.sel.size, size = sc.disks.filter(d => ST.sel.has(d.path)).reduce((a, d) => a + d.size, 0);
-  const b = $('#st-apply');
+  const b = $('#st-apply'), mode = stMode(), names = sc.disks.filter(d => ST.sel.has(d.path)).map(d => d.name).join(' + ');
+  const rm = $('#st-remove');
+  rm.hidden = !(sc.volume_exists || sc.mounted) || mode === 'remove' || mode === 'move';
+  rm.disabled = !ST.data.helper.ok || !!JOB;
+  b.classList.toggle('danger', mode === 'remove' || mode === 'move');
+  if (mode === 'move' || mode === 'remove') {
+    b.disabled = !ST.data.helper.ok || !!JOB;
+    b.textContent = mode === 'move' ? `Move the cache to ${names}` : 'Remove the cache volume';
+    $('#st-sel').textContent = (mode === 'move' ? `The current cache volume is deleted and a new one built on ${names} (${fmtBytes(size)}, erased).` : 'Deletes the cache volume and everything cached on it; its disks become empty.') +
+      (sc.disks.some(d => d.status === 'cache' && !ST.drop.has(d.path)) ? ' The whole volume goes: a joined volume can\'t drop just one disk.' : '');
+    if (!ST.data.helper.ok) $('#st-sel').textContent = 'Run sudo ./webgui/install.sh to update the disk helper.';
+    return;
+  }
   b.disabled = !n || !ST.data.helper.ok || !!JOB;
   b.textContent = sc.cache_kind === 'system' ? 'Cache is on the system disk (grow it above)' : sc.volume_exists ? 'Add selected disks to the cache volume' : 'Use selected disks for the cache';
   if (sc.cache_kind === 'system') b.disabled = true;
@@ -1039,13 +1057,16 @@ function stSel() {
 }
 $('#st-disks').addEventListener('change', e => {
   const c = e.target.closest('[data-disk]'); if (!c) return;
-  c.checked ? ST.sel.add(c.dataset.disk) : ST.sel.delete(c.dataset.disk);
-  c.closest('.disk').classList.toggle('sel', c.checked); stSel();
+  if (c.dataset.incache) { c.checked ? ST.drop.delete(c.dataset.disk) : ST.drop.add(c.dataset.disk); c.closest('.disk').classList.toggle('leaving', !c.checked); }
+  else { c.checked ? ST.sel.add(c.dataset.disk) : ST.sel.delete(c.dataset.disk); c.closest('.disk').classList.toggle('sel', c.checked); }
+  stSel();
 });
 $('#st-refresh').onclick = loadStorage;
 function planHtml(p) {
-  return `${p.erase.length ? `<div class="erase-warn"><b>Everything on ${p.erase_detail.map(d => `${esc(d.name)} (${esc(d.model)}, ${fmtBytes(d.size)})`).join(', ')} will be erased.</b><br>${p.erase_detail.map(d => esc(d.name) + ': ' + esc(d.why)).join('<br>')}</div>` : ''}
-    <div><div class="k" style="margin-bottom:6px">Folder layout</div><div class="layout-box">${p.layout.map(([a, b]) => `${esc(a.padEnd(22))}<span class="c"># ${esc(b)}</span>`).join('\n')}</div></div>
+  const rm = p.action === 'remove' ? p : p.remove;
+  const rmHtml = rm ? `<div class="erase-warn"><b>The current cache volume${rm.freed && rm.freed.length ? ' on ' + esc(rm.freed.join(', ')) : ''} is deleted, with everything cached on it.</b><br>The cache is stopped first.${rm.freed && rm.freed.length ? ' Those disks become empty and can be pulled or reused.' : ''} Disks that were already pulled are fine.</div>` : '';
+  return `${rmHtml}${p.erase.length ? `<div class="erase-warn"><b>Everything on ${p.erase_detail.map(d => `${esc(d.name)} (${esc(d.model)}, ${fmtBytes(d.size)})`).join(', ')} will be erased.</b><br>${p.erase_detail.map(d => esc(d.name) + ': ' + esc(d.why)).join('<br>')}</div>` : ''}
+    ${p.layout.length ? `<div><div class="k" style="margin-bottom:6px">Folder layout</div><div class="layout-box">${p.layout.map(([a, b]) => `${esc(a.padEnd(22))}<span class="c"># ${esc(b)}</span>`).join('\n')}</div></div>` : ''}
     ${p.env_preview ? `<div><div class="k" style="margin-bottom:6px">.env will be set to</div><div class="layout-box">${Object.entries(p.env_preview).map(([k, v]) => `${esc(k)}=${esc(v)}`).join('\n')}</div></div>` : ''}
     <details><summary class="sub" style="cursor:pointer">Commands that will run (${p.steps.length} steps)</summary><ol class="plan">${p.steps.map(s => `<li><span class="d">${esc(s.desc)}</span>${s.cmd ? '<br>' + esc(s.cmd.join(' ')) : ''}</li>`).join('')}</ol></details>`;
 }
@@ -1054,12 +1075,13 @@ async function stApply(action, devices) {
   const getPlan = async fs => api('POST', '/api/storage/plan', { action, devices, fs });
   try { p = await getPlan('ext4'); } catch (e) { return toast(e.message, 'bad'); }
   const erase = p.erase.length > 0;
-  const names = erase ? p.erase.join(' ') : devices.join(' ');
-  const title = action === 'create' ? `Make ${p.erase.join(' + ')} the cache volume?` : action === 'add' ? `Add ${p.erase.join(' + ')} to the cache volume?` : `Use ${devices[0]} as the cache, as-is?`;
-  const prom = ask({ title, ok: erase ? 'Erase and apply' : 'Apply', wide: true, html: `
-    ${action === 'create' ? `<label class="f">Format as<select name="fs" id="st-fs"><option value="ext4">ext4 (recommended)</option><option value="xfs">xfs</option></select></label>` : action === 'add' ? '<p class="sub" style="margin:0">The new disks join the existing volume; the filesystem grows and cached games are kept.</p>' : `<p class="sub" style="margin:0">Nothing is erased: the existing ${esc(p.fs)} filesystem is mounted at ${esc(p.mount)}.</p>`}
+  const title = action === 'create' ? `Make ${p.erase.join(' + ')} the cache volume?` : action === 'add' ? `Add ${p.erase.join(' + ')} to the cache volume?`
+    : action === 'move' ? `Move the cache to ${p.erase.join(' + ')}?` : action === 'remove' ? 'Remove the cache volume?' : `Use ${devices[0]} as the cache, as-is?`;
+  const confirmText = p.confirm.split(',').join(' ');
+  const prom = ask({ title, ok: action === 'remove' ? 'Remove' : erase ? 'Erase and apply' : 'Apply', wide: true, html: `
+    ${action === 'create' || action === 'move' ? `<label class="f">Format as<select name="fs" id="st-fs"><option value="ext4">ext4 (recommended)</option><option value="xfs">xfs</option></select></label>` : action === 'add' ? '<p class="sub" style="margin:0">The new disks join the existing volume; the filesystem grows and cached games are kept.</p>' : `<p class="sub" style="margin:0">Nothing is erased: the existing ${esc(p.fs)} filesystem is mounted at ${esc(p.mount)}.</p>`}
     <div id="st-plan" class="form">${planHtml(p)}</div>
-    <label class="f">${erase ? 'To confirm, type the disk names' : 'To confirm, type the device'}: <b>${esc(names)}</b><input type="text" name="confirm" autocomplete="off" required></label>
+    <label class="f">To confirm, type: <b>${esc(confirmText)}</b><input type="text" name="confirm" autocomplete="off" required></label>
     <p class="sub" style="margin:0">If the cache is running it is restarted on the new storage afterwards. This can take a minute.</p>` });
   const fsSel = $('#st-fs');
   if (fsSel) fsSel.onchange = async () => { try { $('#st-plan').innerHTML = planHtml(await getPlan(fsSel.value)); } catch (e) { toast(e.message, 'bad'); } };
@@ -1067,12 +1089,13 @@ async function stApply(action, devices) {
   if (!f) return;
   try {
     const r = await api('POST', '/api/storage/apply', { action, devices, fs: f.get('fs') || 'ext4', confirm: f.get('confirm') });
-    ST.sel.clear();
+    ST.sel.clear(); ST.drop.clear();
     $('#st-apply').disabled = true;
     followJob(r.job, 'storage', '#st-out', null, () => { loadStorage(); loadConfig(); });
   } catch (e) { toast(e.message, 'bad'); }
 }
-$('#st-apply').onclick = () => stApply(ST.data.scan.volume_exists ? 'add' : 'create', [...ST.sel]);
+$('#st-apply').onclick = () => stApply(stMode(), [...ST.sel]);
+$('#st-remove').onclick = () => stApply('remove', []);
 document.addEventListener('click', async e => {
   const a = e.target.closest('[data-adopt]');
   if (a) return stApply('adopt', [a.dataset.adopt]);
