@@ -20,7 +20,7 @@ import threading
 import time
 import urllib.parse
 
-from lcgui import auth, config, docker, games, logs, prefill, storage, system, tools
+from lcgui import auth, config, docker, games, logs, prefill, storage, system, tools, update
 from lcgui.util import (DATA_DIR, LANCACHE_DIR, STATIC_DIR, audit, audit_tail, data_path, host_ips, is_local_ip, primary_ip,
                         reverse_dns, run, settings, update_settings)
 
@@ -164,7 +164,8 @@ def r_overview(h, q):
             "containers": docker.status() if docker.installed() else [], "docker": docker.installed(),
             "cpu": snap.get("cpu"), "temp": snap.get("temp"), "log_status": logs.STATS.follower.status,
             "lines": logs.STATS.lines, "net": snap.get("net", {}),
-            "prefill": {"update": prefill.update_available(), "running": bool(prefill.current() and prefill.current().ended is None)}}
+            "prefill": {"update": prefill.update_available(), "running": bool(prefill.current() and prefill.current().ended is None)},
+            "gui_update": update.summary()["available"]}
 
 
 @route("GET", "/api/clients/active")
@@ -560,6 +561,33 @@ def r_gui_restart(h, body):
     return {"ok": True}
 
 
+# ---------------------------------------------------------------- GUI self-update from GitHub
+@route("GET", "/api/update")
+def r_update(h, q):
+    return update.summary()
+
+
+@route("POST", "/api/update/check", role="admin")
+def r_update_check(h, body):
+    update.check()
+    return update.summary()
+
+
+@route("POST", "/api/update/apply", role="admin")
+def r_update_apply(h, body):
+    if not os.environ.get("INVOCATION_ID"):
+        raise HttpError(409, "The GUI isn't running as the lancache-gui service, so nothing would start it again after the update. Run sudo ./webgui/install.sh.")
+    if docker.busy() or (prefill.current() and prefill.current().ended is None):
+        raise HttpError(409, "A job is still running (disk change, server action or preload). Updating now would restart the GUI and kill it. Wait until it finishes.")
+    try:
+        msg = update.apply()
+    except ValueError as e:
+        raise HttpError(409, str(e))
+    audit(h.sess["user"], "gui-update", msg)
+    threading.Timer(0.8, lambda: os._exit(0)).start()   # systemd (Restart=always) starts the new version
+    return {"ok": True, "note": msg}
+
+
 @route("POST", "/api/system/reboot", role="admin")
 def r_reboot(h, body):
     if docker.busy():
@@ -861,6 +889,7 @@ def main():
 
     logs.STATS.start()
     system.SAMPLER.start()
+    update.start()
     threading.Thread(target=games.cover, args=(730,), daemon=True).start()   # cache CS2 art while online
     prefill.watcher(lambda: docker.installed() and any(c["service"] == "monolithic" and c["state"] == "running" for c in docker.status()))
 

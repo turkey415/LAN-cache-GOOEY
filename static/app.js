@@ -355,6 +355,7 @@ async function loadOverview() {
   let o;
   try { o = await api('GET', '/api/overview'); } catch (e) { return; }
   OV = o;
+  $('#tabs [data-tab="config"]').classList.toggle('upd', !!o.gui_update);
   const run = new Set(o.containers.filter(c => c.state === 'running').map(c => c.service));
   const anyCtr = o.containers.length > 0;
   lamp('dns', run.has('dns') ? true : anyCtr ? 'crit' : false, false, 'DNS container ' + (run.has('dns') ? 'running' : 'stopped'));
@@ -647,7 +648,8 @@ async function loadHealth() {
   const ghz = (n.freq.avg || 0) / 1000, mx = Math.max(5, Math.ceil((n.freq.rated || 5000) / 1000));
   H.freq({ f: ghz / mx, pf: (n.freq.max_now || 0) / 1000 / mx, text: ghz.toFixed(2), unit: 'AVG · ' + ((n.freq.max_now || 0) / 1000).toFixed(1) + ' MAX', labels: ['0', String(mx / 2), String(mx)] });
   const mu = 1 - n.mem.available / n.mem.total;
-  H.mem({ f: mu, text: String(Math.round(mu * 100)), unit: fmtBytes(n.mem.total - n.mem.available) + ' USED', labels: ['0', '50', '100'] });
+  const [uv, uu] = splitBytes(n.mem.total - n.mem.available), [tv, tu] = splitBytes(n.mem.total);
+  H.mem({ f: mu, text: String(Math.round(mu * 100)), unit: uu === tu ? `${uv} / ${tv} ${tu}` : `${uv} ${uu} / ${tv} ${tu}`, labels: ['0', '50', '100'] });
   const fsm = (m, fs) => m({ f: (fs.total - fs.free) / fs.total, text: String(Math.round(100 * (fs.total - fs.free) / fs.total)), unit: '% used', scale: `${fmtBytes(fs.free)} free · ${fs.path}` });
   fsm(H.mCache, r.fs); fsm(H.mRoot, r.rootfs);
   H.mLoad({ f: n.load[0] / info.cores, text: n.load[0].toFixed(1), unit: `of ${info.cores}`, scale: n.load.map(x => x.toFixed(2)).join(' · ') });
@@ -870,7 +872,45 @@ async function loadConfig() {
   $('#paths').innerHTML = `lancache: <code>${esc(r.paths.lancache)}</code> · cache data: <code>${esc(r.paths.cache_root)}</code> · GUI data: <code>${esc(r.paths.data)}</code>`;
   renderCfg();
   loadStorage();
+  loadGuiUpdate();
 }
+
+// ---------------------------------------------------------------- GUI self-update
+function renderGuiUpdate(u) {
+  const cur = u.current ? `<code>${esc(u.current.hash)}</code> from ${fmtWhen(u.current.time)}` : 'unknown version';
+  const when = u.checked ? `Last checked ${fmtWhen(u.checked)}.` : 'Not checked yet.';
+  let msg, st = false;
+  if (u.checking) msg = 'Checking GitHub…';
+  else if (u.error) { msg = `${esc(u.error)} ${when}`; st = 'warn'; }
+  else if (u.behind) {
+    msg = `<b>Update available:</b> ${u.behind} new change${u.behind > 1 ? 's' : ''} on GitHub. ${when}`; st = 'crit';
+    if (u.dirty) msg += '<br>Files here were edited by hand, so it can\'t update until those edits are committed or undone.';
+    if (u.ahead) msg += '<br>This machine has commits that aren\'t on GitHub yet. Push them first.';
+  } else if (u.checked) { msg = `Up to date. ${when}`; st = true; }
+  else msg = when;
+  $('#gu-status').innerHTML = `${msg}<br><span class="k">Running ${cur}</span>`;
+  $('#gu-lamp').className = 'lamp2' + (st ? ' on ' + (st === true ? '' : st) : '') + (st === 'crit' ? ' blink' : '');
+  $('#gu-lamp').title = st === 'crit' ? 'Update available' : st === true ? 'Up to date' : 'Not checked';
+  $('#gu-commits').hidden = !u.commits.length;
+  $('#gu-commits').innerHTML = u.commits.length ? `<table>${u.commits.map(c => `<tr><td class="mono" style="font-size:11.5px">${esc(c.hash)}</td><td class="l">${esc(c.subject)}</td><td>${fmtWhen(c.time)}</td></tr>`).join('')}</table>` : '';
+  $('#gu-apply').hidden = !(u.available && !u.dirty && !u.ahead);
+  $('#tabs [data-tab="config"]').classList.toggle('upd', !!u.available);
+}
+async function loadGuiUpdate() { try { renderGuiUpdate(await api('GET', '/api/update')); } catch (e) { /* not fatal */ } }
+$('#gu-check').onclick = async () => {
+  const b = $('#gu-check'); b.disabled = true; $('#gu-status').textContent = 'Checking GitHub…';
+  try { renderGuiUpdate(await api('POST', '/api/update/check', {})); } catch (e) { toast(e.message, 'bad'); loadGuiUpdate(); }
+  b.disabled = false;
+};
+$('#gu-apply').onclick = async () => {
+  if (!await confirmBox('Update the GUI?', 'Downloads the newest version from GitHub and restarts the web GUI. The page reconnects by itself in a few seconds. Game downloads for players are not interrupted.', 'Update now')) return;
+  $('#gu-apply').disabled = true;
+  try {
+    const r = await api('POST', '/api/update/apply', {});
+    toast(r.note + '. Restarting…', 'good');
+    setTimeout(function wait() { fetch('/api/me', { credentials: 'same-origin' }).then(x => x.ok || x.status === 401 ? location.reload() : setTimeout(wait, 1500)).catch(() => setTimeout(wait, 1500)); }, 3000);
+  } catch (e) { toast(e.message, 'bad'); $('#gu-apply').disabled = false; loadGuiUpdate(); }
+};
 function issuesFor(key, issues) { return (issues || CFG.data.issues).filter(i => i.key === key); }
 function renderCfg(issues) {
   const d = CFG.data, ro = !isAdmin();

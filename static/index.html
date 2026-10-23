@@ -309,6 +309,13 @@
       </div>
     </section>
     <div class="stack">
+      <section class="card" id="gui-update">
+        <h2>GUI updates <span class="spacer"></span><div class="lamp2" id="gu-lamp"><i></i><span>UPD</span></div></h2>
+        <div id="gu-status" class="sub" style="margin-top:0">Checking…</div>
+        <div class="tbl" id="gu-commits" style="max-height:220px;margin-top:8px" hidden></div>
+        <div class="hrow admin-only" style="margin-top:10px"><button class="btn" id="gu-check">Check now</button><button class="btn primary" id="gu-apply" hidden>Update now</button></div>
+        <p class="sub" style="margin-bottom:0">Checks GitHub every 12 hours. The lamp turns red when a newer version is waiting. Updating restarts the GUI for a few seconds; the cache itself keeps serving.</p>
+      </section>
       <section class="card">
         <h2>This machine</h2>
         <div class="sub" style="margin-bottom:8px">Addresses right now. Click one to use it for <code>LANCACHE_IP</code> and <code>DNS_BIND_IP</code>.</div>

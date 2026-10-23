@@ -604,3 +604,7 @@ body.viewer .admin-only { display: none !important; }
 .split.users s { background: #a35cff; box-shadow: 0 0 6px color-mix(in srgb, #a35cff 50%, transparent); }
 .cap { display: flex; justify-content: space-between; gap: 8px; letter-spacing: .04em; text-transform: none; margin-bottom: 4px; }
 .cap .bl { color: #7fb2ff; } .cap .pu { color: #c79bff; }
+
+/* GUI update waiting: red dot on the Configuration tab */
+nav.tabs button.upd i, nav.tabs button.upd.act i { background: #ff4d4d; box-shadow: 0 0 7px #ff4d4d; }
+#gu-lamp { flex-direction: row; min-width: 0; padding: 4px 7px; }
