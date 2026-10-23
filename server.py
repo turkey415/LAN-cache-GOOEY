@@ -495,10 +495,15 @@ def r_storage(h, q):
 
 @route("POST", "/api/storage/plan", role="admin")
 def r_storage_plan(h, body):
-    p = storage.plan(str(body.get("action")), [str(d) for d in body.get("devices") or []], str(body.get("fs", "ext4")))
+    try:
+        size = int(body.get("size") or 0)
+    except (TypeError, ValueError):
+        raise HttpError(400, "size must be a whole number of GiB")
+    p = storage.plan(str(body.get("action")), [str(d) for d in body.get("devices") or []], str(body.get("fs", "ext4")),
+                     size, body.get("target") if body.get("target") in ("root", "cache") else None)
     if "error" in p:
         raise HttpError(400, p["error"])
-    if p.get("size"):
+    if p.get("size") and p.get("env_change", True):
         p["env_preview"] = {"CACHE_ROOT": p["mount"], **storage.sizes_for(p["size"] * 0.98)}
     return p
 
@@ -507,10 +512,12 @@ def r_storage_plan(h, body):
 def r_storage_apply(h, body):
     try:
         jid = storage.apply(str(body.get("action")), [str(d) for d in body.get("devices") or []], str(body.get("fs", "ext4")),
-                            str(body.get("confirm", "")), h.sess["user"])
-    except (ValueError, RuntimeError) as e:
+                            str(body.get("confirm", "")), h.sess["user"], int(body.get("size") or 0),
+                            body.get("target") if body.get("target") in ("root", "cache") else None)
+    except (ValueError, RuntimeError, TypeError) as e:
         raise HttpError(409, str(e))
-    audit(h.sess["user"], "storage-" + str(body.get("action")), " ".join(body.get("devices") or []))
+    audit(h.sess["user"], "storage-" + str(body.get("action")), " ".join(body.get("devices") or []) +
+          (f" {body.get('target') or ''} {body.get('size')} GiB" if body.get("size") else ""))
     return {"job": jid}
 
 

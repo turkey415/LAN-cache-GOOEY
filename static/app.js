@@ -948,6 +948,7 @@ async function loadStorage() {
     ${fmtBytes(c.fs.free)} free of ${fmtBytes(c.fs.total)}${c.on_system_disk ? ' · <span style="color:#fad06c">on the system disk</span>' : ''}`;
   const hb = $('#st-helper');
   hb.hidden = r.helper.ok || !isAdmin(); hb.innerHTML = r.helper.message ? `⚠ ${esc(r.helper.message)}` : '';
+  renderSysPool(sc, r.helper);
   if (sc.error) { $('#st-disks').innerHTML = `<div class="empty">${esc(sc.error)}</div>`; return; }
   ST.sel.forEach(p => { if (!sc.disks.some(d => d.path === p && d.erasable)) ST.sel.delete(p); });
   $('#st-disks').innerHTML = sc.disks.map(d => {
@@ -965,11 +966,75 @@ async function loadStorage() {
   }).join('');
   stSel();
 }
+function renderSysPool(sc, helper) {
+  const box = $('#st-sys'), L = sc.lvm;
+  if (!L || !L.system_vg) {
+    box.innerHTML = `<div class="k">System disk</div><p class="sub" style="margin:6px 0 0">${L && L.why ? esc(L.why) :
+      'The free space on the system disk shows here once the disk helper is up to date: run <code>sudo ./webgui/install.sh</code>.'}</p>`;
+    return;
+  }
+  const vg = L.system_vg, cache = L.cache_lv ? L.cache_lv.size : 0, root = L.root.size, other = Math.max(0, vg.size - vg.free - root - cache);
+  const pc = v => (100 * v / vg.size).toFixed(2) + '%', usable = Math.max(0, vg.free - L.reserve);
+  const onSys = sc.cache_kind === 'system', canSys = !sc.volume_exists && usable >= 10 * 2 ** 30;
+  box.innerHTML = `<div class="hrow"><span class="k">System disk pool · ${esc(vg.name)}</span><span class="spacer"></span><span class="sub">${fmtBytes(vg.free)} unused of ${fmtBytes(vg.size)}</span></div>
+    <div class="sysbar"><span class="root" style="width:${pc(root + other)}"></span><span class="cache" style="width:${pc(cache)}"></span><span class="rsv" style="width:${pc(Math.min(L.reserve, vg.free))}"></span></div>
+    <div class="syskey"><span><i style="background:#7fb2f0"></i>System volume (/) ${fmtBytes(root)} · ${fmtBytes(L.root.fs_free)} free inside</span>
+      ${cache ? `<span><i style="background:#ff2bd6"></i>Cache volume ${fmtBytes(cache)}</span>` : ''}
+      <span><i style="background:#3a3a37"></i>Unused ${fmtBytes(vg.free)} (${fmtBytes(L.reserve)} always kept back)</span></div>
+    <div class="neons admin-only">
+      ${onSys ? `<button class="neon pink" data-sysact="grow-cache" ${vg.free >= 2 ** 30 ? '' : 'disabled'}><b>▲</b>Grow cache volume</button>`
+              : `<button class="neon pink" data-sysact="sysvol" ${canSys ? '' : 'disabled'} title="${sc.volume_exists ? 'A cache volume already exists' : ''}"><b>▼</b>Use free space for the cache</button>`}
+      <button class="neon green" data-sysact="grow-root" ${vg.free >= 2 ** 30 ? '' : 'disabled'}><b>▲</b>Grow system volume</button>
+    </div>
+    <p class="sub" style="margin:10px 0 0">Neither button changes partitions: they only hand out unused space in this pool. Volumes can grow later but not shrink, so take what you need.</p>`;
+}
+async function sysAction(kind) {
+  const L = ST.data.scan.lvm, vg = L.system_vg, G = 2 ** 30;
+  const isSys = kind === 'sysvol', target = kind === 'grow-root' ? 'root' : kind === 'grow-cache' ? 'cache' : null;
+  const max = Math.floor((isSys ? vg.free - L.reserve : vg.free) / G);
+  const def = isSys ? Math.max(10, Math.min(max, max - 100)) : kind === 'grow-root' ? Math.min(max, 150) : Math.min(max, 500);
+  const color = kind === 'grow-root' ? '#39ff14' : '#ff2bd6';
+  const title = isSys ? 'Make a cache volume from free space on the system disk' : kind === 'grow-root' ? 'Grow the system volume (/)' : 'Grow the cache volume';
+  const action = isSys ? 'sysvol' : 'grow';
+  const getPlan = (size, fs) => api('POST', '/api/storage/plan', { action, size, fs: fs || 'ext4', target });
+  let p;
+  try { p = await getPlan(def); } catch (e) { return toast(e.message, 'bad'); }
+  const prom = ask({ title, ok: 'Apply', wide: true, html: `
+    <div class="f" style="--n:${color}"><span>${isSys ? 'Size of the cache volume' : 'Add this much'} (GiB, up to ${max})</span>
+      <div class="sizepick"><input type="range" id="sp-r" min="${isSys ? 10 : 1}" max="${max}" value="${def}"><input type="number" name="size" id="sp-n" min="${isSys ? 10 : 1}" max="${max}" value="${def}"></div></div>
+    ${isSys ? `<label class="f">Format as<select name="fs" id="sp-fs"><option value="ext4">ext4 (recommended)</option><option value="xfs">xfs</option></select></label>` : ''}
+    <div id="sp-plan" class="form">${sysPlanHtml(p, kind)}</div>
+    <label class="f">To confirm, type: <b>${esc(p.confirm)}</b><input type="text" name="confirm" autocomplete="off" required></label>` });
+  let t;
+  const refresh = () => { clearTimeout(t); t = setTimeout(async () => {
+    try { $('#sp-plan').innerHTML = sysPlanHtml(await getPlan(+$('#sp-n').value, $('#sp-fs') && $('#sp-fs').value), kind); }
+    catch (e) { $('#sp-plan').innerHTML = `<div class="erase-warn">${esc(e.message)}</div>`; } }, 250); };
+  $('#sp-r').oninput = () => { $('#sp-n').value = $('#sp-r').value; refresh(); };
+  $('#sp-n').oninput = () => { $('#sp-r').value = $('#sp-n').value; refresh(); };
+  if ($('#sp-fs')) $('#sp-fs').onchange = refresh;
+  const f = await prom;
+  if (!f) return;
+  try {
+    const r = await api('POST', '/api/storage/apply', { action, size: +f.get('size'), fs: f.get('fs') || 'ext4', target, confirm: f.get('confirm') });
+    followJob(r.job, title.toLowerCase(), '#st-out', null, () => { loadStorage(); loadConfig(); });
+  } catch (e) { toast(e.message, 'bad'); }
+}
+function sysPlanHtml(p, kind) {
+  const G = 2 ** 30;
+  return `<div class="layout-box">${kind === 'sysvol' ? `New cache volume   ${fmtBytes(p.size)}` : kind === 'grow-root' ? `System volume (/)  → ${fmtBytes(p.size)}` : `Cache volume       → ${fmtBytes(p.size)}`}
+Unused in the pool ${fmtBytes(p.free_before)} → ${fmtBytes(p.free_after)}</div>
+    ${p.layout.length ? `<div><div class="k" style="margin-bottom:6px">Folder layout</div><div class="layout-box">${p.layout.map(([a, b]) => `${esc(a.padEnd(22))}<span class="c"># ${esc(b)}</span>`).join('\n')}</div></div>` : ''}
+    ${p.env_preview ? `<div><div class="k" style="margin-bottom:6px">.env will be set to</div><div class="layout-box">${Object.entries(p.env_preview).map(([k, v]) => `${esc(k)}=${esc(v)}`).join('\n')}</div></div>` : ''}
+    <p class="sub" style="margin:0">${kind === 'grow-root' ? 'Happens while running; nothing restarts.' : 'Nothing existing is erased. If the cache is running it restarts afterwards to use the new space.'}</p>
+    <details><summary class="sub" style="cursor:pointer">Commands that will run (${p.steps.length})</summary><ol class="plan">${p.steps.map(s => `<li><span class="d">${esc(s.desc)}</span>${s.cmd ? '<br>' + esc(s.cmd.join(' ')) : ''}</li>`).join('')}</ol></details>`;
+}
+document.addEventListener('click', e => { const b = e.target.closest('[data-sysact]'); if (b && !b.disabled) sysAction(b.dataset.sysact); });
 function stSel() {
   const sc = ST.data.scan, n = ST.sel.size, size = sc.disks.filter(d => ST.sel.has(d.path)).reduce((a, d) => a + d.size, 0);
   const b = $('#st-apply');
   b.disabled = !n || !ST.data.helper.ok || !!JOB;
-  b.textContent = sc.volume_exists ? 'Add selected disks to the cache volume' : 'Use selected disks for the cache';
+  b.textContent = sc.cache_kind === 'system' ? 'Cache is on the system disk (grow it above)' : sc.volume_exists ? 'Add selected disks to the cache volume' : 'Use selected disks for the cache';
+  if (sc.cache_kind === 'system') b.disabled = true;
   $('#st-sel').textContent = n ? `${n} disk${n > 1 ? 's' : ''} selected · ${fmtBytes(size)} · will be erased` : (ST.data.helper.ok ? 'Tick the disks to use.' : 'Run sudo ./webgui/install.sh again to enable disk setup.');
 }
 $('#st-disks').addEventListener('change', e => {

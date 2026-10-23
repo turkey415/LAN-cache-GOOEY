@@ -70,6 +70,26 @@ player after that gets it at LAN speed.
 
 **Force full download** fetches everything again (for a wiped cache). Other Steam games: add their app IDs under Options.
 
+## Storage
+
+**Configuration → Storage** lists every disk with its status (system, in cache, mounted, has data, empty).
+
+- **Spare disks:** tick them and apply. They're combined end to end (LVM, JBOD-style) into one volume mounted at
+  `/srv/lancache`, with game data in `/srv/lancache/cache` and logs in `/srv/lancache/logs`. Add more disks
+  later to grow it without losing cached games. If one disk dies the cache volume is lost, which for a cache just
+  means re-downloading.
+- **The system disk** is never repartitioned. Ubuntu's installer often uses only 100 GB of a big disk and leaves
+  the rest unused in its LVM pool. **▼ Use free space for the cache** makes a cache volume from that unused space,
+  **▲ Grow cache volume** adds more mid-event, and **▲ Grow system volume** gives `/` more room. All of these work
+  while the machine is running. 20 GiB of the pool is always kept back.
+- Every change shows the exact commands and asks you to type a name to confirm. Disk changes run through a small
+  root-owned helper (`tools/lancache-gooey-disk`) that `install.sh` installs with a sudo rule for only that program.
+  It re-checks every request and refuses the system disk, mounted disks, and disks belonging to other volumes.
+
+Why not RAID? The network is the bottleneck: 1 Gb/s is about 125 MB/s, and even 10 Gb/s is about 1.25 GB/s.
+One NVMe drive is far faster than that, and hot data is served from RAM. Striping would also stop you from adding
+one disk at a time, and mirroring wastes half the space protecting data you can re-download.
+
 ## Moving to a new venue
 
 1. Plug in and boot. The panel listens on whatever address DHCP gives the machine.

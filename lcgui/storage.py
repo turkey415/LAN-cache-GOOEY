@@ -11,9 +11,13 @@ HELPER_SRC = os.path.join(GUI_DIR, "tools", "lancache-gooey-disk")
 HELPER_BIN = "/usr/local/sbin/lancache-gooey-disk"
 
 
-def _src(args):
-    """Run the helper from the repo as this user (read-only commands: scan, plan)."""
-    code, out = run(["/usr/bin/python3", "-I", HELPER_SRC] + args, timeout=30)
+def _src(args, as_root=None):
+    """Run a read-only helper command (scan, plan). Uses the installed helper as root when it is current,
+    so it can read LVM details; otherwise the repo copy as this user."""
+    if as_root is None:
+        as_root = helper_state()["ok"]
+    cmd = ["sudo", "-n", HELPER_BIN] if as_root else ["/usr/bin/python3", "-I", HELPER_SRC]
+    code, out = run(cmd + args, timeout=30)
     try:
         return json.loads(out.strip().splitlines()[-1])
     except (ValueError, IndexError):
@@ -53,12 +57,20 @@ def where_cache_is():
 
 
 def status():
-    s = _src(["scan"])
-    return {"scan": s, "helper": helper_state(), "cache": where_cache_is()}
+    h = helper_state()
+    s = _src(["scan"], as_root=h["ok"])
+    return {"scan": s, "helper": h, "cache": where_cache_is()}
 
 
-def plan(action, devices, fs):
-    return _src(["plan", action, "--fs", fs] + list(devices))
+def _plan_args(action, devices, fs, size, target):
+    a = ["plan", action, "--fs", fs, "--size", str(int(size or 0))]
+    if target:
+        a += ["--target", target]
+    return a + list(devices)
+
+
+def plan(action, devices, fs, size=0, target=None):
+    return _src(_plan_args(action, devices, fs, size, target))
 
 
 def sizes_for(total_bytes):
@@ -69,19 +81,21 @@ def sizes_for(total_bytes):
     return {"CACHE_DISK_SIZE": f"{disk}g", "CACHE_INDEX_SIZE": f"{index}m"}
 
 
-def apply(action, devices, fs, confirm, user):
-    p = plan(action, devices, fs)
-    if "error" in p:
-        raise ValueError(p["error"])
-    want = ",".join(sorted(p["erase"])) if p["erase"] else ",".join(devices)
-    if ",".join(sorted(x for x in confirm.replace(" ", ",").split(",") if x)) != want:
-        raise ValueError(f"Type exactly: {want.replace(',', ' ')}")
+def apply(action, devices, fs, confirm, user, size=0, target=None):
     h = helper_state()
     if not h["ok"]:
         raise ValueError(h["message"])
+    p = plan(action, devices, fs, size, target)
+    if "error" in p:
+        raise ValueError(p["error"])
+    want = p["confirm"]
+    if ",".join(sorted(x for x in confirm.replace(" ", ",").split(",") if x)) != ",".join(sorted(want.split(","))):
+        raise ValueError(f"Type exactly: {want.replace(',', ' ')}")
     was_running = any(c["service"] == "monolithic" and c["state"] == "running" for c in docker.status()) if docker.installed() else False
 
     def point_env(job):
+        if not p.get("env_change", True):
+            return 0
         st = os.statvfs(p["mount"])
         vals = {"CACHE_ROOT": p["mount"], **sizes_for(st.f_blocks * st.f_frsize)}
         b = config.set_env(vals)
@@ -90,9 +104,10 @@ def apply(action, devices, fs, confirm, user):
             job["out"].append("The cache wasn't running. Press Start on the Service tab when ready.\n")
         return 0
 
-    steps = [["sudo", "-n", HELPER_BIN, "apply", action, "--fs", p["fs"] if p["fs"] in ("ext4", "xfs") else "ext4", "--confirm", want] + list(devices),
-             point_env]
-    if was_running:
+    args = _plan_args(action, devices, p["fs"] if p.get("fs") in ("ext4", "xfs") else "ext4", size, target)
+    args[0] = "apply"
+    steps = [["sudo", "-n", HELPER_BIN] + args[:-len(devices) or None] + ["--confirm", want] + list(devices), point_env]
+    if was_running and p.get("env_change", True):
         steps.append(["docker", "compose", "up", "-d", "--force-recreate", "--remove-orphans"])
     return docker.start_job("storage-" + action, user, steps=steps)
 

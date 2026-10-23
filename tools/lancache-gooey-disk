@@ -15,10 +15,16 @@ Layout:
   /srv/lancache/cache   cached game data   (CACHE_ROOT=/srv/lancache)
   /srv/lancache/logs    access.log, error.log
 
+The OS disk is never repartitioned. Its unused LVM space can be used two ways:
+  sysvol  new volume '<system VG>/lancache' from free space, mounted at /srv/lancache
+  grow    grow the system volume (/) or that cache volume by N GiB, online
+
 Usage:
   lancache-gooey-disk scan
   lancache-gooey-disk plan  create|add|adopt [--fs ext4|xfs] DEVICE...
-  lancache-gooey-disk apply create|add|adopt [--fs ext4|xfs] --confirm NAMES DEVICE...
+  lancache-gooey-disk plan  sysvol --size GIB [--fs ext4|xfs]
+  lancache-gooey-disk plan  grow --target root|cache --size GIB
+  lancache-gooey-disk apply ... --confirm TEXT     (TEXT is the 'confirm' value from plan)
   lancache-gooey-disk version
 """
 import argparse
@@ -29,7 +35,9 @@ import subprocess
 import sys
 import time
 
-VERSION = "1"
+VERSION = "2"
+SYS_LV = "lancache"          # cache volume name inside the system VG
+RESERVE_GIB = 20             # always leave this much free in the system VG
 VG, LV = "lancache", "cache"
 LVPATH = f"/dev/{VG}/{LV}"
 MOUNT = "/srv/lancache"
@@ -70,6 +78,8 @@ def describe(d):
              for n in nodes[1:]]
     if f"{VG}-{LV}" in lvs:
         status, why = "cache", f"part of the cache volume ({MOUNT})"
+    elif any(n["type"] == "lvm" and n["name"].endswith("-" + SYS_LV) for n in nodes) and any(m == "/" for m in mps):
+        status, why = "system", f"holds the operating system and the cache volume ({MOUNT})"
     elif any(m in ("/", "[SWAP]") or m.startswith(("/boot", "/usr", "/var", "/home", "/snap")) for m in mps):
         status, why = "system", "holds the operating system"
     elif mps:
@@ -90,10 +100,41 @@ def describe(d):
             "fstype": d.get("fstype")}
 
 
+def _report(cmd, key):
+    r = subprocess.run(cmd + ["--reportformat", "json", "--units", "b", "--nosuffix"], capture_output=True, text=True)
+    if r.returncode != 0:
+        return []
+    return json.loads(r.stdout)["report"][0][key]
+
+
+def lvm_info():
+    """System VG, root LV and a cache LV inside the system VG. Needs root (returns None otherwise)."""
+    if os.geteuid() != 0:
+        return None
+    root_src = subprocess.run(["findmnt", "-n", "-o", "SOURCE", "/"], capture_output=True, text=True).stdout.strip()
+    root_fs = subprocess.run(["findmnt", "-n", "-o", "FSTYPE", "/"], capture_output=True, text=True).stdout.strip()
+    lvs = _report(["lvs", "-o", "lv_name,vg_name,lv_size,lv_path,lv_dm_path"], "lv")
+    root = next((l for l in lvs if root_src and os.path.realpath(l["lv_dm_path"]) == os.path.realpath(root_src)), None)
+    if not root:
+        return {"system_vg": None, "why": "the system volume is not on LVM"}
+    vg = next((v for v in _report(["vgs", "-o", "vg_name,vg_size,vg_free"], "vg") if v["vg_name"] == root["vg_name"]), None)
+    st = os.statvfs("/")
+    cache = next((l for l in lvs if l["vg_name"] == root["vg_name"] and l["lv_name"] == SYS_LV), None)
+    return {"system_vg": {"name": vg["vg_name"], "size": int(vg["vg_size"]), "free": int(vg["vg_free"])},
+            "root": {"path": root["lv_path"], "name": root["lv_name"], "size": int(root["lv_size"]), "fs": root_fs,
+                     "fs_total": st.f_blocks * st.f_frsize, "fs_free": st.f_bavail * st.f_frsize},
+            "cache_lv": {"path": cache["lv_path"], "size": int(cache["lv_size"])} if cache else None,
+            "reserve": RESERVE_GIB * 2 ** 30}
+
+
 def scan():
-    disks = [describe(d) for d in lsblk() if d["type"] == "disk" and int(d["size"] or 0) > 0]
-    return {"disks": disks, "volume_exists": any(d["status"] == "cache" for d in disks) or os.path.exists(LVPATH),
-            "mount": MOUNT, "mounted": mounted(MOUNT), "version": VERSION}
+    blk = lsblk()
+    disks = [describe(d) for d in blk if d["type"] == "disk" and int(d["size"] or 0) > 0]
+    on_system = any(n["type"] == "lvm" and n["name"].endswith("-" + SYS_LV) and not n["name"].startswith(VG + "-")
+                    for d in blk for n in walk(d))
+    kind = "disks" if (any(d["status"] == "cache" for d in disks) or os.path.exists(LVPATH)) else "system" if on_system else None
+    return {"disks": disks, "volume_exists": kind is not None, "cache_kind": kind,
+            "mount": MOUNT, "mounted": mounted(MOUNT), "version": VERSION, "lvm": lvm_info()}
 
 
 def _pick(paths, need_erasable=True):
@@ -132,7 +173,13 @@ def _finish_steps(fs, source):
     ]
 
 
-def plan(action, paths, fs):
+def _gib(n):
+    return f"{n / 2 ** 30:.0f} GiB"
+
+
+def plan(action, paths, fs, size_gib=0, target=None):
+    if action in ("sysvol", "grow"):
+        return plan_lvm(action, fs, size_gib, target)
     if fs not in FORMATS:
         raise Refused(f"filesystem must be one of {', '.join(FORMATS)}")
     if action == "create":
@@ -180,11 +227,67 @@ def plan(action, paths, fs):
     else:
         raise Refused("action must be create, add or adopt")
     return {"action": action, "fs": fs, "mount": MOUNT, "erase": [d["name"] for d in erase],
+            "confirm": ",".join(sorted(d["name"] for d in erase)) if erase else ",".join(paths), "env_change": True,
             "erase_detail": [{"name": d["name"], "model": d["model"], "size": d["size"], "why": d["why"]} for d in erase],
             "size": size, "devices": paths, "steps": [{k: v for k, v in st.items()} for st in steps],
             "layout": [[MOUNT, "mount point (the cache volume)"], [MOUNT + "/cache", "cached game data"],
                        [MOUNT + "/logs", "access.log and error.log"]],
             "env": {"CACHE_ROOT": MOUNT}}
+
+
+def plan_lvm(action, fs, size_gib, target):
+    info = lvm_info()
+    if info is None:
+        raise Refused("needs root to read the system volume group (is the helper installed? run sudo ./webgui/install.sh)")
+    if not info.get("system_vg"):
+        raise Refused(info.get("why", "no system volume group"))
+    vg, free = info["system_vg"]["name"], info["system_vg"]["free"]
+    try:
+        size_gib = int(size_gib)
+    except (TypeError, ValueError):
+        raise Refused("size must be a whole number of GiB")
+    want = size_gib * 2 ** 30
+    s = scan()
+    layout = [[MOUNT, f"mount point (volume {vg}/{SYS_LV})"], [MOUNT + "/cache", "cached game data"], [MOUNT + "/logs", "access.log and error.log"]]
+    if action == "sysvol":
+        if fs not in FORMATS:
+            raise Refused(f"filesystem must be one of {', '.join(FORMATS)}")
+        if s["volume_exists"]:
+            raise Refused("a cache volume already exists")
+        if s["mounted"]:
+            raise Refused(f"{MOUNT} is already mounted")
+        if size_gib < 10:
+            raise Refused("make it at least 10 GiB")
+        if want > free - info["reserve"]:
+            raise Refused(f"only {_gib(max(0, free - info['reserve']))} can be used ({_gib(free)} free, {RESERVE_GIB} GiB kept for the system)")
+        lv = f"/dev/{vg}/{SYS_LV}"
+        mk = ["mkfs.ext4", "-F", "-L", "lancache", "-m", "0", lv] if fs == "ext4" else ["mkfs.xfs", "-f", "-L", "lancache", lv]
+        steps = [{"desc": f"Create volume '{SYS_LV}' ({size_gib} GiB) from free space in '{vg}'. Existing partitions and volumes are not touched.",
+                  "cmd": ["lvcreate", "-y", "-L", f"{size_gib}G", "-n", SYS_LV, vg]},
+                 {"desc": f"Format it as {fs}", "cmd": mk}] + _finish_steps(fs, lv)
+        return {"action": action, "fs": fs, "mount": MOUNT, "erase": [], "erase_detail": [], "size": want, "devices": [],
+                "steps": steps, "layout": layout, "env": {"CACHE_ROOT": MOUNT}, "confirm": vg, "env_change": True,
+                "free_before": free, "free_after": free - want}
+    if action == "grow":
+        if target not in ("root", "cache"):
+            raise Refused("target must be root or cache")
+        if size_gib < 1:
+            raise Refused("grow by at least 1 GiB")
+        if want > free:
+            raise Refused(f"only {_gib(free)} is free in '{vg}'")
+        if target == "root":
+            lv, label, new = info["root"]["path"], "the system volume (/)", info["root"]["size"] + want
+        else:
+            if not info["cache_lv"]:
+                raise Refused("the cache is not on the system disk; grow it by adding disks instead")
+            lv, label, new = info["cache_lv"]["path"], f"the cache volume ({MOUNT})", info["cache_lv"]["size"] + want
+        steps = [{"desc": f"Grow {label} by {size_gib} GiB and resize its filesystem, while running", "cmd": ["lvextend", "-r", "-L", f"+{size_gib}G", lv]}]
+        if target == "cache":
+            steps.append({"desc": f"Make sure {MOUNT}/cache and {MOUNT}/logs exist", "internal": "folders"})
+        return {"action": action, "target": target, "fs": None, "mount": MOUNT if target == "cache" else "/", "erase": [], "erase_detail": [],
+                "size": new, "devices": [], "steps": steps, "layout": layout if target == "cache" else [],
+                "env": {}, "confirm": target, "env_change": target == "cache", "free_before": free, "free_after": free - want}
+    raise Refused("unknown action")
 
 
 def _uuid(dev):
@@ -230,8 +333,9 @@ def apply(p):
                 return r.returncode
         else:
             {"fstab": _fstab, "folders": _folders}[st["internal"]](st)
-    st = os.statvfs(MOUNT)
-    print("RESULT " + json.dumps({"mount": MOUNT, "total": st.f_blocks * st.f_frsize, "free": st.f_bavail * st.f_frsize}), flush=True)
+    where = p.get("mount") or MOUNT
+    st = os.statvfs(where)
+    print("RESULT " + json.dumps({"mount": where, "total": st.f_blocks * st.f_frsize, "free": st.f_bavail * st.f_frsize}), flush=True)
     print("Done.", flush=True)
     return 0
 
@@ -243,6 +347,8 @@ def main():
     ap.add_argument("devices", nargs="*")
     ap.add_argument("--fs", default="ext4")
     ap.add_argument("--confirm", default="")
+    ap.add_argument("--size", default="0", help="GiB, for sysvol and grow")
+    ap.add_argument("--target", default=None, help="root or cache, for grow")
     a = ap.parse_args()
     try:
         if a.command == "version":
@@ -251,15 +357,14 @@ def main():
         if a.command == "scan":
             print(json.dumps(scan()))
             return 0
-        p = plan(a.action, a.devices, a.fs)
+        p = plan(a.action, a.devices, a.fs, a.size, a.target)
         if a.command == "plan":
             print(json.dumps(p))
             return 0
         if os.geteuid() != 0:
             raise Refused("apply must run as root")
-        want = ",".join(sorted(p["erase"])) if p["erase"] else ",".join(a.devices)
-        if ",".join(sorted(x for x in a.confirm.split(",") if x)) != want:
-            raise Refused(f"--confirm must be exactly: {want}")
+        if ",".join(sorted(x for x in a.confirm.split(",") if x)) != ",".join(sorted(p["confirm"].split(","))):
+            raise Refused(f"--confirm must be exactly: {p['confirm']}")
         return apply(p)
     except Refused as e:
         print(json.dumps({"error": str(e)}) if a.command in ("scan", "plan") else f"Refused: {e}", flush=True)

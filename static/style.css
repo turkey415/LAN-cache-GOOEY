@@ -548,3 +548,27 @@ body.viewer .admin-only { display: none !important; }
 .layout-box { background: #0b0b0a; border: 1px solid #2f2f2d; border-radius: 6px; padding: 8px 12px; font: 12.5px/1.7 ui-monospace, Menlo, Consolas, monospace; white-space: pre; overflow-x: auto; }
 .layout-box .c { color: var(--muted); }
 .erase-warn { border-left: 3px solid #ff4d4d; background: color-mix(in srgb, #ff4d4d 10%, transparent); padding: 8px 12px; border-radius: 6px; font-size: 13px; }
+
+/* system disk pool + neon action buttons */
+.sysbar { display: flex; height: 16px; border-radius: 4px; overflow: hidden; background: var(--led-off); margin: 10px 0 6px; }
+.sysbar span { display: block; height: 100%; }
+.sysbar .root { background: #7fb2f0; box-shadow: 0 0 8px #7fb2f0; }
+.sysbar .cache { background: #ff2bd6; box-shadow: 0 0 8px #ff2bd6; }
+.sysbar .rsv { background: repeating-linear-gradient(45deg, #3a3a37 0 4px, #2a2a28 4px 8px); }
+.syskey { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--text-2); }
+.syskey i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.neons { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+.neon { --n: #00f0ff; font: 700 12px ui-monospace, Menlo, Consolas, monospace; letter-spacing: .14em; text-transform: uppercase; cursor: pointer;
+  padding: 11px 16px; border-radius: 7px; display: inline-flex; align-items: center; gap: 10px;
+  color: var(--n); background: color-mix(in srgb, var(--n) 9%, #0c0c0b); border: 1.5px solid var(--n);
+  text-shadow: 0 0 6px var(--n), 0 0 14px color-mix(in srgb, var(--n) 60%, transparent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--n) 55%, transparent), inset 0 0 12px color-mix(in srgb, var(--n) 25%, transparent);
+  animation: neon 2.6s ease-in-out infinite; transition: transform .15s; }
+.neon b { font-size: 17px; line-height: 1; }
+.neon:hover:not(:disabled) { transform: translateY(-1px); background: color-mix(in srgb, var(--n) 18%, #0c0c0b); }
+.neon:disabled { animation: none; filter: grayscale(1) brightness(.55); cursor: not-allowed; }
+.neon.pink { --n: #ff2bd6; } .neon.green { --n: #39ff14; } .neon.cyan { --n: #00f0ff; }
+@keyframes neon { 50% { box-shadow: 0 0 18px color-mix(in srgb, var(--n) 80%, transparent), inset 0 0 16px color-mix(in srgb, var(--n) 35%, transparent); } }
+@media (prefers-reduced-motion: reduce) { .neon { animation: none; } }
+.sizepick { display: grid; grid-template-columns: 1fr 120px; gap: 12px; align-items: center; }
+.sizepick input[type=range] { width: 100%; accent-color: var(--n, #ff2bd6); }
