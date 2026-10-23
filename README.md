@@ -31,7 +31,7 @@ The first admin password is printed at the end of the install and saved in `webg
 Change it under **Users**, which also deletes the file. Forgot it? `cd webgui && python3 server.py --reset-password admin`
 
 You don't need to edit anything by hand first: set the IPs and disk in **Configuration**, then press **Start** on
-the **Server** tab.
+the **Service** tab.
 
 ## Tabs
 
@@ -43,7 +43,7 @@ the **Server** tab.
 | **Preload** | Download CS2 (or any Steam games) into the cache before players do. See below. |
 | **Live Logs** | Streaming access log (hits green, misses orange), nginx errors, the cache and DNS container logs, and the GUI's own log. Filter, pause, hits/misses only. |
 | **Health** | CPU load per core, clock, temperatures (CPU, NVMe, GPU), memory, load, drives, network throughput and link use, container stats. |
-| **Server** | Start / Stop / Restart / Update the containers with live output, a pre-flight checklist, a DNS test, and a start-on-boot switch. |
+| **Service** | Start / Stop / Restart / Update the containers with live output, a pre-flight checklist, a DNS test, and a start-on-boot switch. |
 | **Configuration** | Edit `.env` as a form (each setting's help text and live checks) or as raw text, plus `docker-compose.yml`. "This machine" fills in the current IP. Every save makes a backup you can view or restore. Save **venue profiles**. |
 | **Users** | Admin and viewer accounts, the activity log, and changing your own password. |
 
@@ -76,7 +76,7 @@ player after that gets it at LAN speed.
 2. **Configuration → This machine**: click the current address. It fills `LANCACHE_IP` and `DNS_BIND_IP`.
    Or load a saved **venue profile**.
 3. **Save and restart cache**.
-4. **Server → DNS test** should show game names pointing at the cache.
+4. **Service → DNS test** should show game names pointing at the cache.
 5. Point the venue's DHCP DNS server option at `DNS_BIND_IP` (or set players' DNS by hand).
 6. Optional: **Configuration → New HTTPS certificate** so the certificate matches the new IP, then
    `sudo systemctl restart lancache-gui`.

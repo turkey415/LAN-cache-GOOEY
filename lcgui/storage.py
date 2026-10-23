@@ -87,7 +87,7 @@ def apply(action, devices, fs, confirm, user):
         b = config.set_env(vals)
         job["out"].append("Updated .env (backup " + str(b) + "): " + ", ".join(f"{k}={v}" for k, v in vals.items()) + "\n")
         if not was_running:
-            job["out"].append("The cache wasn't running. Press Start on the Server tab when ready.\n")
+            job["out"].append("The cache wasn't running. Press Start on the Service tab when ready.\n")
         return 0
 
     steps = [["sudo", "-n", HELPER_BIN, "apply", action, "--fs", p["fs"] if p["fs"] in ("ext4", "xfs") else "ext4", "--confirm", want] + list(devices),

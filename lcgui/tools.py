@@ -92,7 +92,7 @@ def _listening():
 
 
 def preflight():
-    """Checklist shown on the Server tab: [{id, ok: true|false|null(warn), title, detail}]."""
+    """Checklist shown on the Service tab: [{id, ok: true|false|null(warn), title, detail}]."""
     env = config.env_dict()
     checks = []
     add = lambda cid, ok, title, detail="": checks.append({"id": cid, "ok": ok, "title": title, "detail": detail})

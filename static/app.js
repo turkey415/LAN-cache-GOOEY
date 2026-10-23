@@ -284,7 +284,8 @@ async function boot() {
   $('#me-name').textContent = me.user; $('#me-role').textContent = me.role; $('#me-role').className = 'tag-role ' + me.role;
   $('#hostline').textContent = `${me.event || ''} · ${me.hostname} · https://${location.host}`;
   document.title = (me.event || 'LAN Cache') + ' · Deck';
-  const want = (location.hash || '#deck').slice(1);
+  let want = (location.hash || '#deck').slice(1);
+  if (want === 'server') want = 'service';   // old bookmarks
   showTab($(`#tabs [data-tab="${want}"]`) ? want : 'deck');
   startTimers();
 }
@@ -297,7 +298,7 @@ function showTab(t) {
   $$('#tabs button').forEach(b => b.classList.toggle('act', b.dataset.tab === t));
   $$('main.page').forEach(p => p.hidden = p.dataset.page !== t);
   history.replaceState(null, '', '#' + t);
-  const fn = { preload: loadPreload, hosts: loadHosts, games: loadGames, logs: openLogs, health: loadHealth, server: () => loadServer(true), config: loadConfig, users: loadUsers }[t];
+  const fn = { preload: loadPreload, hosts: loadHosts, games: loadGames, logs: openLogs, health: loadHealth, service: () => loadServer(true), config: loadConfig, users: loadUsers }[t];
   if (fn) fn(true);
   if (t !== 'logs' && window._es) { window._es.close(); window._es = null; }
   charts.forEach(c => c.draw());
@@ -310,7 +311,7 @@ function startTimers() {
   loadOverview();
   every(2000, loadOverview);
   every(2000, () => { if (TAB === 'hosts') loadHosts(); if (TAB === 'health') loadHealth(); });
-  every(5000, () => { if (TAB === 'server') loadServer(false); });
+  every(5000, () => { if (TAB === 'service') loadServer(false); });
   every(1000, () => { if (TAB === 'preload' && (PF.running || ++PF.tick % 5 === 0)) loadPreload(); });
   every(15000, () => { if (TAB === 'games' && $('#game-detail').hidden) loadGames(); if (TAB === 'deck') loadDeckGames(); });
 }
@@ -641,7 +642,7 @@ async function loadHealth() {
   else if (r.containers) $('#h-ctr').innerHTML = r.containers.length ? `<table><tr><th>Container</th><th>CPU</th><th>Memory</th><th>Network</th><th>Disk I/O</th></tr>${r.containers.map(c => `<tr><td>${esc(c.name)}</td><td>${esc(c.cpu)}</td><td>${esc(c.mem)}</td><td>${esc(c.net)}</td><td>${esc(c.block)}</td></tr>`).join('')}</table>` : '<div class="empty">No containers running.</div>';
 }
 
-// ================================================================ SERVER
+// ================================================================ SERVICE (cache containers)
 $('#r-cells').innerHTML = '<i></i>'.repeat(24);
 let JOB = null;
 async function loadServer(withChecks) {
@@ -691,7 +692,7 @@ async function followJob(id, act, outSel = '#job-out', titleSel = '#job-title', 
     await new Promise(r => setTimeout(r, 700));
   }
   JOB = null;
-  if (TAB === 'server') loadServer(true);
+  if (TAB === 'service') loadServer(true);
   if (after) after();
 }
 $('#autostart').onchange = async e => {
@@ -742,7 +743,7 @@ async function loadPreload(first) {
   $('#pf-setup').innerHTML = [
     [r.installed, 'SteamPrefill downloaded', r.installed ? `Version ${r.version || '?'}` : 'Press Download SteamPrefill (needs internet once)'],
     [r.logged_in ? true : null, 'Steam account', r.logged_in ? 'Logged in (saved by SteamPrefill)' : 'Not logged in yet. The first preload asks for it.'],
-    [cacheUp ? true : false, 'Cache running', cacheUp ? 'Preloads go into the cache' : 'Start the cache on the Server tab first'],
+    [cacheUp ? true : false, 'Cache running', cacheUp ? 'Preloads go into the cache' : 'Start the cache on the Service tab first'],
   ].map(([ok, t, d]) => `<div class="check"><span class="sled ${ok === true ? 'ready' : ok === false ? 'bad' : 'busy'}"></span><div><b>${t}</b><div class="sub">${esc(d)}</div></div></div>`).join('');
   $('#pf-install').textContent = r.installed ? 'Update SteamPrefill' : 'Download SteamPrefill';
   if (first === true || document.activeElement?.closest('#pf-prompt, .form') == null) {
@@ -891,7 +892,7 @@ async function saveCfg() {
   } catch (e) { toast(e.message, 'bad'); return false; }
 }
 $('#cfg-save').onclick = saveCfg;
-$('#cfg-save-restart').onclick = async () => { if (await saveCfg()) { showTab('server'); serverAction('restart'); } };
+$('#cfg-save-restart').onclick = async () => { if (await saveCfg()) { showTab('service'); serverAction('restart'); } };
 $('#cfg-revert').onclick = () => { CFG.edits = {}; CFG.raw = { env: CFG.data.raw.env, compose: CFG.data.raw.compose }; renderCfg(); };
 $('#env-add').onclick = async () => {
   const f = await ask({ title: 'Add a setting', ok: 'Add', html: `<label class="f">Name<input type="text" name="k" pattern="[A-Za-z_][A-Za-z0-9_]*" required placeholder="e.g. CACHE_SLICE_SIZE"></label><label class="f">Value<input type="text" name="v"></label>
