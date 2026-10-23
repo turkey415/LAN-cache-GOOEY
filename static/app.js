@@ -738,7 +738,10 @@ async function loadPreload(first) {
   }).join('');
   const re = $('#pf-reactor');
   re.className = 'reactor ' + (running ? 'firing' : r.update_available.length ? 'armed' : r.last_run && r.last_run.ok ? 'ready' : '');
-  $('#pf-rstate').textContent = running ? (j.phone ? 'approve the sign-in on your phone' : j.prompt ? 'waiting for you: see below' : 'preloading…') : r.update_available.length ? 'new build available' : r.last_run ? (r.last_run.ok ? 'cache up to date' : 'last preload failed') : 'ready';
+  const tr = r.traffic || { rate: 0, hit: 0, miss: 0 };
+  const flowing = running && tr.rate > 0;
+  $('#pf-rstate').textContent = running ? (j.phone ? 'approve the sign-in on your phone' : j.prompt ? 'waiting for you: see below'
+    : flowing ? `downloading through the cache · ${fmtRate(tr.rate)} · ${fmtBytes(tr.hit + tr.miss)} in the last 30 s` : 'preloading…') : r.update_available.length ? 'new build available' : r.last_run ? (r.last_run.ok ? 'cache up to date' : 'last preload failed') : 'ready';
   const since = running ? Date.now() / 1000 - j.started : r.last_run ? Date.now() / 1000 - r.last_run.t : null;
   $('#pf-clock').innerHTML = since == null ? '' : seg7(running ? String(Math.floor(since / 60)).padStart(2, '0') + ':' + String(Math.floor(since % 60)).padStart(2, '0') : '--:--', 4);
   const cells = $$('#pf-cells i'), lead = running ? Math.floor(Date.now() / 250) % 24 : -1;
@@ -764,7 +767,7 @@ async function loadPreload(first) {
     PF.n = j.n;
     let live = $('#pf-live', out);
     if (!live) { out.insertAdjacentHTML('beforeend', '<div id="pf-live" class="note"></div>'); live = $('#pf-live', out); }
-    out.appendChild(live); live.textContent = running ? j.partial : '';
+    out.appendChild(live); live.textContent = running ? (j.partial || (flowing ? `Downloading through the cache at ${fmtRate(tr.rate)} (SteamPrefill shows its own progress when it finishes a step)` : '')) : '';
     out.scrollTop = 1e9;
     $('#pf-jobline').textContent = `${j.force ? 'forced · ' : ''}${j.auto ? 'automatic · ' : ''}${running ? 'running' : 'exit ' + j.code}`;
     $('#pf-phone').hidden = !(running && j.phone);

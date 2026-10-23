@@ -191,6 +191,11 @@ class Job:
                     break
                 self._add(ANSI_RE.sub("", data.decode("utf-8", "replace")))
                 last = time.time()
+                if last - getattr(self, "_plog", 0) > 10:   # progress redraws in place: note it now and then
+                    self._plog = last
+                    p = self.partial.split("\r")[-1].strip()
+                    if p:
+                        self._log("[progress] " + p[-200:])
                 with self.lock:
                     self.prompt = None
             elif time.time() - last > 0.8:

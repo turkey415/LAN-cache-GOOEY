@@ -143,8 +143,24 @@ def r_user_del(h, q, name):
 
 
 # ---------------------------------------------------------------- dashboard data
+_own = {"t": 0, "ips": set()}
+
+
+def _is_local(ip):
+    """Requests from this machine itself. SteamPrefill reaches the cache via localhost or a Docker bridge,
+    whose gateway address belongs to this machine. Exact addresses only, so players on 172.x LANs aren't caught."""
+    if time.time() - _own["t"] > 60:
+        code, out = run(["ip", "-j", "-4", "addr"], timeout=5)
+        try:
+            _own["ips"] = {a["local"] for i in json.loads(out) for a in i.get("addr_info", [])}
+        except (ValueError, KeyError):
+            pass
+        _own["t"] = time.time()
+    return ip.startswith("127.") or ip in _own["ips"]
+
+
 def _label(ip):
-    return settings()["labels"].get(ip)
+    return settings()["labels"].get(ip) or ("Preload (this machine)" if _is_local(ip) else None)
 
 
 @route("GET", "/api/overview")
@@ -560,6 +576,9 @@ def r_reboot(h, body):
 @route("GET", "/api/prefill")
 def r_prefill(h, q):
     st = prefill.status()
+    local = [c for c in logs.STATS.active(30) if _is_local(c["ip"])]
+    st["traffic"] = {"rate": sum(c["rate_hit"] + c["rate_miss"] for c in local), "hit": sum(c["hit"] for c in local),
+                     "miss": sum(c["miss"] for c in local)}
     j = prefill.current()
     if j:
         st["job"] = prefill.job_info(j, int(q.get("since", 0)))
