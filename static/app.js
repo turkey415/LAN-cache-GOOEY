@@ -676,21 +676,23 @@ async function serverAction(act, force) {
     } else toast(e.message, 'bad');
   }
 }
-async function followJob(id, act) {
+async function followJob(id, act, outSel = '#job-out', titleSel = '#job-title', after) {
   JOB = id;
-  const out = $('#job-out'); out.innerHTML = '';
-  $('#job-title').textContent = act + ' · running';
+  const out = $(outSel); out.innerHTML = ''; out.hidden = false;
+  const title = $(titleSel) || { set textContent(v) {} };
+  title.textContent = act + ' · running';
   let since = 0;
   while (true) {
     let j;
     try { j = await api('GET', `/api/server/job/${id}?since=${since}`); } catch (e) { break; }
     if (j.out) { out.insertAdjacentHTML('beforeend', j.out.split('\n').filter(Boolean).map(l => `<div class="${lineClass(l)}">${esc(l)}</div>`).join('')); out.scrollTop = 1e9; }
     since = j.lines;
-    if (j.done) { $('#job-title').textContent = `${act} · ${j.code === 0 ? 'done' : 'failed (exit ' + j.code + ')'}`; toast(`${act}: ${j.code === 0 ? 'done' : 'failed'}`, j.code === 0 ? 'good' : 'bad'); break; }
+    if (j.done) { title.textContent = `${act} · ${j.code === 0 ? 'done' : 'failed (exit ' + j.code + ')'}`; toast(`${act}: ${j.code === 0 ? 'done' : 'failed'}`, j.code === 0 ? 'good' : 'bad'); break; }
     await new Promise(r => setTimeout(r, 700));
   }
   JOB = null;
   if (TAB === 'server') loadServer(true);
+  if (after) after();
 }
 $('#autostart').onchange = async e => {
   try { const r = await api('POST', '/api/server/autostart', { on: e.target.checked }); toast(r.note); } catch (err) { toast(err.message, 'bad'); e.target.checked = !e.target.checked; }
@@ -814,6 +816,7 @@ async function loadConfig() {
   ['#set-event', '#set-window'].forEach(s => $(s).disabled = !isAdmin());
   $('#paths').innerHTML = `lancache: <code>${esc(r.paths.lancache)}</code> · cache data: <code>${esc(r.paths.cache_root)}</code> · GUI data: <code>${esc(r.paths.data)}</code>`;
   renderCfg();
+  loadStorage();
 }
 function issuesFor(key, issues) { return (issues || CFG.data.issues).filter(i => i.key === key); }
 function renderCfg(issues) {
@@ -931,6 +934,87 @@ $('#stats-reset').onclick = async () => {
   try { await api('POST', '/api/stats/reset', {}); toast('Statistics cleared', 'good'); } catch (e) { toast(e.message, 'bad'); }
 };
 window.addEventListener('beforeunload', e => { if (CFG.data && TAB === 'config' && cfgDirty()) e.preventDefault(); });
+
+// ================================================================ STORAGE
+const ST = { data: null, sel: new Set() };
+const STATUS_BADGE = { cache: ['cache', 'IN CACHE'], system: ['idle', 'SYSTEM'], mounted: ['mixed', 'MOUNTED'], busy: ['idle', 'IN USE'], data: ['internet', 'HAS DATA'], empty: ['blue', 'EMPTY'] };
+async function loadStorage() {
+  let r;
+  try { r = await api('GET', '/api/storage'); } catch (e) { return; }
+  ST.data = r;
+  const c = r.cache, sc = r.scan;
+  $('#st-where').innerHTML = `<b>Cache folder now:</b> <code>${esc(c.root)}</code> on <code>${esc(c.source || '?')}</code> (${esc(c.fstype || '?')}, mounted at <code>${esc(c.mount || '?')}</code>) ·
+    ${fmtBytes(c.fs.free)} free of ${fmtBytes(c.fs.total)}${c.on_system_disk ? ' · <span style="color:#fad06c">on the system disk</span>' : ''}`;
+  const hb = $('#st-helper');
+  hb.hidden = r.helper.ok || !isAdmin(); hb.innerHTML = r.helper.message ? `⚠ ${esc(r.helper.message)}` : '';
+  if (sc.error) { $('#st-disks').innerHTML = `<div class="empty">${esc(sc.error)}</div>`; return; }
+  ST.sel.forEach(p => { if (!sc.disks.some(d => d.path === p && d.erasable)) ST.sel.delete(p); });
+  $('#st-disks').innerHTML = sc.disks.map(d => {
+    const [cls, txt] = STATUS_BADGE[d.status] || ['idle', d.status.toUpperCase()];
+    const sb = splitBytes(d.size);
+    const parts = d.parts.filter(p => p.type === 'part' || p.type === 'lvm').map(p => `${esc(p.name)} ${fmtBytes(p.size)}${p.fstype ? ' ' + esc(p.fstype) : ''}${p.label ? ' “' + esc(p.label) + '”' : ''}${p.mountpoints.length ? ' → ' + esc(p.mountpoints.join(', ')) : ''}`);
+    const adopt = isAdmin() && !sc.volume_exists ? d.adoptable.map(p => `<button class="btn ghost" data-adopt="${esc(p.path)}" title="Mount it at /srv/lancache without erasing">Use ${esc(p.name)} as-is</button>`).join('') : '';
+    const folder = isAdmin() && d.status === 'mounted' ? d.mountpoints.filter(m => m.startsWith('/') && m !== '/').map(m => `<button class="btn ghost" data-stfolder="${esc(m.replace(/\/$/, '') + '/lancache')}">Use folder ${esc(m)}/lancache</button>`).join('') : '';
+    return `<div class="disk${ST.sel.has(d.path) ? ' sel' : ''}">
+      <input type="checkbox" data-disk="${esc(d.path)}" ${ST.sel.has(d.path) ? 'checked' : ''} ${d.erasable && isAdmin() ? '' : 'disabled'} title="${d.erasable ? 'Select' : esc(d.why)}">
+      <div><b>${esc(d.name)}</b> <span class="sub">${esc(d.kind)}</span><span class="k">${esc(d.model || 'unknown model')}</span></div>
+      <div class="size">${seg7(sb[0], 4)}<span class="k">${sb[1]}</span></div>
+      <div class="what">${esc(d.why)}${parts.length ? `<span class="k">${parts.join(' · ')}</span>` : ''}${adopt || folder ? `<div class="hrow" style="margin-top:4px">${adopt}${folder}</div>` : ''}</div>
+      <span class="src ${cls}"><i></i>${txt}</span></div>`;
+  }).join('');
+  stSel();
+}
+function stSel() {
+  const sc = ST.data.scan, n = ST.sel.size, size = sc.disks.filter(d => ST.sel.has(d.path)).reduce((a, d) => a + d.size, 0);
+  const b = $('#st-apply');
+  b.disabled = !n || !ST.data.helper.ok || !!JOB;
+  b.textContent = sc.volume_exists ? 'Add selected disks to the cache volume' : 'Use selected disks for the cache';
+  $('#st-sel').textContent = n ? `${n} disk${n > 1 ? 's' : ''} selected · ${fmtBytes(size)} · will be erased` : (ST.data.helper.ok ? 'Tick the disks to use.' : 'Run sudo ./webgui/install.sh again to enable disk setup.');
+}
+$('#st-disks').addEventListener('change', e => {
+  const c = e.target.closest('[data-disk]'); if (!c) return;
+  c.checked ? ST.sel.add(c.dataset.disk) : ST.sel.delete(c.dataset.disk);
+  c.closest('.disk').classList.toggle('sel', c.checked); stSel();
+});
+$('#st-refresh').onclick = loadStorage;
+function planHtml(p) {
+  return `${p.erase.length ? `<div class="erase-warn"><b>Everything on ${p.erase_detail.map(d => `${esc(d.name)} (${esc(d.model)}, ${fmtBytes(d.size)})`).join(', ')} will be erased.</b><br>${p.erase_detail.map(d => esc(d.name) + ': ' + esc(d.why)).join('<br>')}</div>` : ''}
+    <div><div class="k" style="margin-bottom:6px">Folder layout</div><div class="layout-box">${p.layout.map(([a, b]) => `${esc(a.padEnd(22))}<span class="c"># ${esc(b)}</span>`).join('\n')}</div></div>
+    ${p.env_preview ? `<div><div class="k" style="margin-bottom:6px">.env will be set to</div><div class="layout-box">${Object.entries(p.env_preview).map(([k, v]) => `${esc(k)}=${esc(v)}`).join('\n')}</div></div>` : ''}
+    <details><summary class="sub" style="cursor:pointer">Commands that will run (${p.steps.length} steps)</summary><ol class="plan">${p.steps.map(s => `<li><span class="d">${esc(s.desc)}</span>${s.cmd ? '<br>' + esc(s.cmd.join(' ')) : ''}</li>`).join('')}</ol></details>`;
+}
+async function stApply(action, devices) {
+  let p;
+  const getPlan = async fs => api('POST', '/api/storage/plan', { action, devices, fs });
+  try { p = await getPlan('ext4'); } catch (e) { return toast(e.message, 'bad'); }
+  const erase = p.erase.length > 0;
+  const names = erase ? p.erase.join(' ') : devices.join(' ');
+  const title = action === 'create' ? `Make ${p.erase.join(' + ')} the cache volume?` : action === 'add' ? `Add ${p.erase.join(' + ')} to the cache volume?` : `Use ${devices[0]} as the cache, as-is?`;
+  const prom = ask({ title, ok: erase ? 'Erase and apply' : 'Apply', wide: true, html: `
+    ${action === 'create' ? `<label class="f">Format as<select name="fs" id="st-fs"><option value="ext4">ext4 (recommended)</option><option value="xfs">xfs</option></select></label>` : action === 'add' ? '<p class="sub" style="margin:0">The new disks join the existing volume; the filesystem grows and cached games are kept.</p>' : `<p class="sub" style="margin:0">Nothing is erased: the existing ${esc(p.fs)} filesystem is mounted at ${esc(p.mount)}.</p>`}
+    <div id="st-plan" class="form">${planHtml(p)}</div>
+    <label class="f">${erase ? 'To confirm, type the disk names' : 'To confirm, type the device'}: <b>${esc(names)}</b><input type="text" name="confirm" autocomplete="off" required></label>
+    <p class="sub" style="margin:0">If the cache is running it is restarted on the new storage afterwards. This can take a minute.</p>` });
+  const fsSel = $('#st-fs');
+  if (fsSel) fsSel.onchange = async () => { try { $('#st-plan').innerHTML = planHtml(await getPlan(fsSel.value)); } catch (e) { toast(e.message, 'bad'); } };
+  const f = await prom;
+  if (!f) return;
+  try {
+    const r = await api('POST', '/api/storage/apply', { action, devices, fs: f.get('fs') || 'ext4', confirm: f.get('confirm') });
+    ST.sel.clear();
+    $('#st-apply').disabled = true;
+    followJob(r.job, 'storage', '#st-out', null, () => { loadStorage(); loadConfig(); });
+  } catch (e) { toast(e.message, 'bad'); }
+}
+$('#st-apply').onclick = () => stApply(ST.data.scan.volume_exists ? 'add' : 'create', [...ST.sel]);
+document.addEventListener('click', async e => {
+  const a = e.target.closest('[data-adopt]');
+  if (a) return stApply('adopt', [a.dataset.adopt]);
+  const fo = e.target.closest('[data-stfolder]');
+  if (fo && await confirmBox('Use this folder for the cache?', `CACHE_ROOT becomes <code>${esc(fo.dataset.stfolder)}</code> (game data in <code>${esc(fo.dataset.stfolder)}/cache</code>). Nothing is erased. Restart the cache afterwards.`, 'Use it')) {
+    try { const r = await api('POST', '/api/storage/use-folder', { path: fo.dataset.stfolder }); toast('Saved: ' + Object.entries(r.env).map(([k, v]) => k + '=' + v).join(', '), 'good'); loadConfig(); } catch (err) { toast(err.message, 'bad'); }
+  }
+});
 
 // ================================================================ USERS
 async function loadUsers() {

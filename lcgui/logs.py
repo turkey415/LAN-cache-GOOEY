@@ -143,6 +143,11 @@ class Follower(threading.Thread):
                 if self.on_progress:
                     self.on_progress(self.ino, self.pos, True)
                 time.sleep(0.5)
+                if os.path.join(logs_dir(), self.fname) != self.path:   # CACHE_ROOT changed: follow the new folder
+                    f.close()
+                    f = None
+                    from_start = True
+                    continue
                 try:
                     st = os.stat(path)
                 except FileNotFoundError:

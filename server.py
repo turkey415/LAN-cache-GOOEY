@@ -20,7 +20,7 @@ import threading
 import time
 import urllib.parse
 
-from lcgui import auth, config, docker, games, logs, prefill, system, tools
+from lcgui import auth, config, docker, games, logs, prefill, storage, system, tools
 from lcgui.util import (DATA_DIR, LANCACHE_DIR, STATIC_DIR, audit, audit_tail, data_path, host_ips, primary_ip,
                         reverse_dns, run, settings, update_settings)
 
@@ -485,6 +485,43 @@ def r_dns(h, q):
     if name and not re.fullmatch(r"[A-Za-z0-9.-]{1,253}", name):
         raise HttpError(400, "bad name")
     return tools.dns_check(name or None)
+
+
+# ---------------------------------------------------------------- storage (disks)
+@route("GET", "/api/storage")
+def r_storage(h, q):
+    return storage.status()
+
+
+@route("POST", "/api/storage/plan", role="admin")
+def r_storage_plan(h, body):
+    p = storage.plan(str(body.get("action")), [str(d) for d in body.get("devices") or []], str(body.get("fs", "ext4")))
+    if "error" in p:
+        raise HttpError(400, p["error"])
+    if p.get("size"):
+        p["env_preview"] = {"CACHE_ROOT": p["mount"], **storage.sizes_for(p["size"] * 0.98)}
+    return p
+
+
+@route("POST", "/api/storage/apply", role="admin")
+def r_storage_apply(h, body):
+    try:
+        jid = storage.apply(str(body.get("action")), [str(d) for d in body.get("devices") or []], str(body.get("fs", "ext4")),
+                            str(body.get("confirm", "")), h.sess["user"])
+    except (ValueError, RuntimeError) as e:
+        raise HttpError(409, str(e))
+    audit(h.sess["user"], "storage-" + str(body.get("action")), " ".join(body.get("devices") or []))
+    return {"job": jid}
+
+
+@route("POST", "/api/storage/use-folder", role="admin")
+def r_storage_folder(h, body):
+    try:
+        b, vals = storage.use_folder(str(body.get("path", "")))
+    except ValueError as e:
+        raise HttpError(400, str(e))
+    audit(h.sess["user"], "storage-folder", json.dumps(vals))
+    return {"ok": True, "backup": b, "env": vals}
 
 
 # ---------------------------------------------------------------- preload (SteamPrefill)

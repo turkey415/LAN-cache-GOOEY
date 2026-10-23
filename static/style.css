@@ -531,3 +531,20 @@ body.viewer .admin-only { display: none !important; }
 #pf-lamps { margin-bottom: 2px; }
 #pf-go { font-size: 14px; padding: 15px; }
 .lamp2#l-upd, .lamp2#l-pre { cursor: pointer; }
+
+/* storage */
+.disk { display: grid; grid-template-columns: 22px minmax(170px, 1.2fr) 90px minmax(0, 2fr) auto; gap: 14px; align-items: center; padding: 10px 12px; background: var(--well); border: 1px solid rgba(255, 255, 255, .06); border-radius: 8px; }
+.disk.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.disk input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--accent); }
+.disk b { font-weight: 600; }
+.disk .k { display: block; text-transform: none; letter-spacing: .05em; overflow: hidden; text-overflow: ellipsis; }
+.disk .what { min-width: 0; font-size: 12.5px; color: var(--text-2); }
+.disk .what .k { white-space: normal; }
+.disk .size .seg7 { height: 18px; }
+.src.blue { color: #7fb2f0; border-color: color-mix(in srgb, #7fb2f0 45%, transparent); background: color-mix(in srgb, #7fb2f0 9%, transparent); }
+@media (max-width: 760px) { .disk { grid-template-columns: 22px minmax(0, 1fr) auto; } .disk .what { grid-column: 2 / -1; } .disk .size { display: none; } }
+.plan { margin: 0; padding-left: 20px; font: 12px/1.6 ui-monospace, Menlo, Consolas, monospace; color: var(--text-2); max-height: 220px; overflow: auto; }
+.plan .d { color: var(--text); font-family: system-ui, sans-serif; font-size: 12.5px; }
+.layout-box { background: #0b0b0a; border: 1px solid #2f2f2d; border-radius: 6px; padding: 8px 12px; font: 12.5px/1.7 ui-monospace, Menlo, Consolas, monospace; white-space: pre; overflow-x: auto; }
+.layout-box .c { color: var(--muted); }
+.erase-warn { border-left: 3px solid #ff4d4d; background: color-mix(in srgb, #ff4d4d 10%, transparent); padding: 8px 12px; border-radius: 6px; font-size: 13px; }

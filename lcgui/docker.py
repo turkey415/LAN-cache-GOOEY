@@ -91,10 +91,15 @@ def images():
     return res
 
 
-def start_job(action, user):
-    """Run an action in the background. Returns job id, or raises if another job is running."""
-    if action not in ACTIONS:
-        raise ValueError("unknown action")
+def start_job(action, user, steps=None):
+    """Run an action in the background. Returns job id, or raises if another job is running.
+
+    steps: list of argv lists, or callables f(job) -> exit code. Defaults to the docker ACTIONS entry.
+    """
+    if steps is None:
+        if action not in ACTIONS:
+            raise ValueError("unknown action")
+        steps = [["docker"] + a for a in ACTIONS[action]]
     if not _busy.acquire(blocking=False):
         raise RuntimeError("Another server action is still running.")
     jid = uuid.uuid4().hex[:12]
@@ -106,13 +111,16 @@ def start_job(action, user):
 
     def work():
         try:
-            for args in ACTIONS[action]:
-                job["out"].append(f"$ docker {' '.join(args)}\n")
-                p = subprocess.Popen(["docker"] + args, cwd=LANCACHE_DIR, stdout=subprocess.PIPE,
-                                     stderr=subprocess.STDOUT, text=True, bufsize=1)
-                for line in p.stdout:
-                    job["out"].append(line)
-                job["code"] = p.wait()
+            for args in steps:
+                if callable(args):
+                    job["code"] = args(job)
+                else:
+                    job["out"].append(f"$ {' '.join(args)}\n")
+                    p = subprocess.Popen(args, cwd=LANCACHE_DIR, stdout=subprocess.PIPE,
+                                         stderr=subprocess.STDOUT, text=True, bufsize=1)
+                    for line in p.stdout:
+                        job["out"].append(line)
+                    job["code"] = p.wait()
                 if job["code"] != 0:
                     break
         except Exception as e:  # noqa: BLE001 - report anything to the UI

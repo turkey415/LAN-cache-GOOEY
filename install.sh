@@ -46,6 +46,13 @@ mkdir -p "$CACHE_ROOT/logs"
 chmod o+rx "$CACHE_ROOT" "$CACHE_ROOT/logs"
 chmod -R o+r "$CACHE_ROOT/logs" 2>/dev/null || true
 
+echo "== Installing the disk helper (lets the GUI set up cache disks)"
+install -o root -g root -m 0755 "$GUI_DIR/tools/lancache-gooey-disk" /usr/local/sbin/lancache-gooey-disk
+SUDOERS=/etc/sudoers.d/lancache-gooey
+echo "$RUN_USER ALL=(root) NOPASSWD: /usr/local/sbin/lancache-gooey-disk" > "$SUDOERS.tmp"
+chmod 0440 "$SUDOERS.tmp"
+if visudo -cf "$SUDOERS.tmp" >/dev/null; then mv "$SUDOERS.tmp" "$SUDOERS"; else rm -f "$SUDOERS.tmp"; echo "   (sudo rule failed validation; disk setup from the GUI won't work)"; fi
+
 echo "== Installing the lancache-gui service"
 cat > /etc/systemd/system/lancache-gui.service <<EOF
 [Unit]
@@ -71,6 +78,9 @@ systemctl daemon-reload
 # Stop a copy that was started by hand, so the service can use the port.
 pkill -f "python3 $GUI_DIR/server.py" 2>/dev/null || true
 pkill -f "^python3 server.py" -u "$RUN_USER" 2>/dev/null || true
+sleep 1
+# Anything else still holding the port?
+for pid in $(ss -ltnpH "sport = :$PORT" 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u); do kill "$pid" 2>/dev/null || true; done
 systemctl enable lancache-gui
 systemctl restart lancache-gui
 sleep 2

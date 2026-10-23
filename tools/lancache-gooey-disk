@@ -1,0 +1,270 @@
+#!/usr/bin/python3 -I
+"""Disk helper for LAN Cache GOOEY.
+
+Turns one or more whole disks into the lancache storage volume, or adds disks to it.
+Installed root-owned at /usr/local/sbin/lancache-gooey-disk by install.sh, with a sudo rule
+that lets the GUI's user run only this program. Every request is re-checked here, as root:
+
+  - only whole disks of type "disk" are accepted
+  - a disk is refused if anything on it is mounted, is swap, or belongs to another LVM/RAID/ZFS volume
+  - the mount point and volume names are fixed (/srv/lancache, LVM lancache/cache)
+  - 'apply' needs --confirm with exactly the disk names being erased
+
+Layout:
+  /srv/lancache         mount point of LVM volume lancache/cache (all selected disks combined)
+  /srv/lancache/cache   cached game data   (CACHE_ROOT=/srv/lancache)
+  /srv/lancache/logs    access.log, error.log
+
+Usage:
+  lancache-gooey-disk scan
+  lancache-gooey-disk plan  create|add|adopt [--fs ext4|xfs] DEVICE...
+  lancache-gooey-disk apply create|add|adopt [--fs ext4|xfs] --confirm NAMES DEVICE...
+  lancache-gooey-disk version
+"""
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+
+VERSION = "1"
+VG, LV = "lancache", "cache"
+LVPATH = f"/dev/{VG}/{LV}"
+MOUNT = "/srv/lancache"
+FORMATS = ("ext4", "xfs")
+ADOPTABLE = ("ext4", "xfs", "btrfs")
+BUSY_FS = ("LVM2_member", "linux_raid_member", "zfs_member", "swap", "crypto_LUKS", "bcache")
+os.environ["PATH"] = "/usr/sbin:/usr/bin:/sbin:/bin"
+
+
+class Refused(Exception):
+    pass
+
+
+def lsblk():
+    out = subprocess.run(["lsblk", "-J", "-b", "-o", "NAME,PATH,SIZE,TYPE,FSTYPE,LABEL,UUID,MOUNTPOINTS,MODEL,ROTA,TRAN,SERIAL"],
+                         capture_output=True, text=True, check=True).stdout
+    return json.loads(out)["blockdevices"]
+
+
+def walk(d):
+    yield d
+    for c in d.get("children") or []:
+        yield from walk(c)
+
+
+def mounted(path):
+    with open("/proc/mounts") as f:
+        return any(line.split()[1] == path for line in f)
+
+
+def describe(d):
+    nodes = list(walk(d))
+    mps = sorted({m for n in nodes for m in (n.get("mountpoints") or []) if m})
+    lvs = [n["name"] for n in nodes if n["type"] == "lvm"]
+    fstypes = [n.get("fstype") for n in nodes if n.get("fstype")]
+    parts = [{"name": n["name"], "path": n["path"], "size": n["size"], "type": n["type"], "fstype": n.get("fstype"),
+              "label": n.get("label"), "uuid": n.get("uuid"), "mountpoints": [m for m in (n.get("mountpoints") or []) if m]}
+             for n in nodes[1:]]
+    if f"{VG}-{LV}" in lvs:
+        status, why = "cache", f"part of the cache volume ({MOUNT})"
+    elif any(m in ("/", "[SWAP]") or m.startswith(("/boot", "/usr", "/var", "/home", "/snap")) for m in mps):
+        status, why = "system", "holds the operating system"
+    elif mps:
+        status, why = "mounted", "in use at " + ", ".join(mps)
+    elif any(t in BUSY_FS for t in fstypes):
+        status, why = "busy", "member of another volume (" + ", ".join(sorted(set(t for t in fstypes if t in BUSY_FS))) + ")"
+    elif fstypes:
+        status, why = "data", "has data: " + ", ".join(f"{p['fstype']}{' “' + p['label'] + '”' if p['label'] else ''}" for p in parts + [{"fstype": d.get("fstype"), "label": d.get("label")}] if p["fstype"])
+    else:
+        status, why = "empty", "no partitions or filesystems found"
+    adopt = [p for p in ([{"name": d["name"], "path": d["path"], "size": d["size"], "fstype": d.get("fstype"), "label": d.get("label"),
+                           "uuid": d.get("uuid"), "mountpoints": [m for m in (d.get("mountpoints") or []) if m]}] + parts)
+             if p.get("fstype") in ADOPTABLE and not p["mountpoints"]] if status in ("data",) else []
+    kind = "NVMe" if (d.get("tran") == "nvme" or d["name"].startswith("nvme")) else ("HDD" if d.get("rota") else "SSD")
+    return {"name": d["name"], "path": d["path"], "size": d["size"], "model": (d.get("model") or "").strip(),
+            "serial": d.get("serial"), "kind": kind, "tran": d.get("tran"), "status": status, "why": why,
+            "erasable": status in ("data", "empty"), "mountpoints": mps, "parts": parts, "adoptable": adopt,
+            "fstype": d.get("fstype")}
+
+
+def scan():
+    disks = [describe(d) for d in lsblk() if d["type"] == "disk" and int(d["size"] or 0) > 0]
+    return {"disks": disks, "volume_exists": any(d["status"] == "cache" for d in disks) or os.path.exists(LVPATH),
+            "mount": MOUNT, "mounted": mounted(MOUNT), "version": VERSION}
+
+
+def _pick(paths, need_erasable=True):
+    s = scan()
+    by_path = {d["path"]: d for d in s["disks"]}
+    out = []
+    for p in paths:
+        d = by_path.get(p)
+        if not d:
+            raise Refused(f"{p} is not a whole disk on this machine")
+        if need_erasable and not d["erasable"]:
+            raise Refused(f"{d['name']} can't be used: {d['why']}")
+        out.append(d)
+    if len({d["path"] for d in out}) != len(out):
+        raise Refused("the same disk was given twice")
+    return s, out
+
+
+def _wipe_steps(disks):
+    steps = []
+    for d in disks:
+        for p in reversed(d["parts"]):
+            steps.append({"desc": f"Erase signatures on {p['name']}", "cmd": ["wipefs", "-a", p["path"]]})
+        steps.append({"desc": f"Erase partition table on {d['name']}", "cmd": ["wipefs", "-a", d["path"]]})
+        steps.append({"desc": f"Reload {d['name']}", "cmd": ["blockdev", "--rereadpt", d["path"]], "may_fail": True})
+    steps.append({"desc": "Wait for devices", "cmd": ["udevadm", "settle"], "may_fail": True})
+    return steps
+
+
+def _finish_steps(fs, source):
+    return [
+        {"desc": f"Create {MOUNT}", "cmd": ["mkdir", "-p", MOUNT]},
+        {"desc": f"Add {MOUNT} to /etc/fstab (mounted at every boot)", "internal": "fstab", "source": source, "fs": fs},
+        {"desc": f"Mount {MOUNT}", "cmd": ["mount", MOUNT]},
+        {"desc": f"Create {MOUNT}/cache and {MOUNT}/logs", "internal": "folders"},
+    ]
+
+
+def plan(action, paths, fs):
+    if fs not in FORMATS:
+        raise Refused(f"filesystem must be one of {', '.join(FORMATS)}")
+    if action == "create":
+        s, disks = _pick(paths)
+        if not disks:
+            raise Refused("pick at least one disk")
+        if s["volume_exists"]:
+            raise Refused("a cache volume already exists; use 'add' to grow it")
+        if s["mounted"]:
+            raise Refused(f"{MOUNT} is already mounted")
+        dp = [d["path"] for d in disks]
+        mk = ["mkfs.ext4", "-F", "-L", "lancache", "-m", "0", LVPATH] if fs == "ext4" else ["mkfs.xfs", "-f", "-L", "lancache", LVPATH]
+        steps = _wipe_steps(disks) + [
+            {"desc": "Prepare disks for LVM", "cmd": ["pvcreate", "-ff", "-y"] + dp},
+            {"desc": f"Create volume group '{VG}'", "cmd": ["vgcreate", VG] + dp},
+            {"desc": f"Create one volume '{LV}' using all the space", "cmd": ["lvcreate", "-y", "-l", "100%FREE", "-n", LV, VG]},
+            {"desc": f"Format it as {fs}", "cmd": mk},
+        ] + _finish_steps(fs, LVPATH)
+        erase, size = disks, sum(d["size"] for d in disks)
+    elif action == "add":
+        s, disks = _pick(paths)
+        if not disks:
+            raise Refused("pick at least one disk")
+        if not s["volume_exists"]:
+            raise Refused("there is no cache volume yet; use 'create'")
+        dp = [d["path"] for d in disks]
+        steps = _wipe_steps(disks) + [
+            {"desc": "Prepare disks for LVM", "cmd": ["pvcreate", "-ff", "-y"] + dp},
+            {"desc": f"Add them to volume group '{VG}'", "cmd": ["vgextend", VG] + dp},
+            {"desc": "Grow the cache volume and its filesystem (cached data is kept)", "cmd": ["lvextend", "-r", "-l", "+100%FREE", LVPATH]},
+            {"desc": f"Make sure {MOUNT}/cache and {MOUNT}/logs exist", "internal": "folders"},
+        ]
+        erase, size = disks, sum(d["size"] for d in disks) + sum(d["size"] for d in s["disks"] if d["status"] == "cache")
+    elif action == "adopt":
+        if len(paths) != 1:
+            raise Refused("pick exactly one filesystem to use as-is")
+        s = scan()
+        target = next((p for d in s["disks"] for p in d["adoptable"] if p["path"] == paths[0]), None)
+        if not target:
+            raise Refused(f"{paths[0]} is not an unmounted ext4/xfs/btrfs filesystem on a non-system disk")
+        if s["mounted"]:
+            raise Refused(f"{MOUNT} is already mounted")
+        steps = _finish_steps(target["fstype"], target["path"])
+        erase, size, fs = [], target["size"], target["fstype"]
+    else:
+        raise Refused("action must be create, add or adopt")
+    return {"action": action, "fs": fs, "mount": MOUNT, "erase": [d["name"] for d in erase],
+            "erase_detail": [{"name": d["name"], "model": d["model"], "size": d["size"], "why": d["why"]} for d in erase],
+            "size": size, "devices": paths, "steps": [{k: v for k, v in st.items()} for st in steps],
+            "layout": [[MOUNT, "mount point (the cache volume)"], [MOUNT + "/cache", "cached game data"],
+                       [MOUNT + "/logs", "access.log and error.log"]],
+            "env": {"CACHE_ROOT": MOUNT}}
+
+
+def _uuid(dev):
+    r = subprocess.run(["blkid", "-s", "UUID", "-o", "value", dev], capture_output=True, text=True)
+    if r.returncode != 0 or not r.stdout.strip():
+        raise Refused(f"could not read the UUID of {dev}")
+    return r.stdout.strip()
+
+
+def _fstab(step):
+    uuid = _uuid(step["source"])
+    line = f"UUID={uuid} {MOUNT} {step['fs']} defaults,noatime,nofail 0 2\n"
+    with open("/etc/fstab") as f:
+        old = f.readlines()
+    shutil.copy2("/etc/fstab", "/etc/fstab.lancache-gooey.bak")
+    keep = [l for l in old if not (l.split() and not l.lstrip().startswith("#") and len(l.split()) > 1 and l.split()[1] == MOUNT)]
+    tmp = "/etc/fstab.lancache-gooey.tmp"
+    with open(tmp, "w") as f:
+        f.writelines(keep + ["# LAN Cache GOOEY cache volume\n", line])
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, "/etc/fstab")
+    subprocess.run(["systemctl", "daemon-reload"], check=False)
+    print(f"  {line.strip()}")
+
+
+def _folders(_step):
+    for p in (MOUNT, MOUNT + "/cache", MOUNT + "/logs"):
+        os.makedirs(p, exist_ok=True)
+    os.chmod(MOUNT, 0o755)
+    os.chmod(MOUNT + "/logs", 0o755)
+
+
+def apply(p):
+    for i, st in enumerate(p["steps"], 1):
+        print(f"[{i}/{len(p['steps'])}] {st['desc']}", flush=True)
+        if "cmd" in st:
+            print("  $ " + " ".join(st["cmd"]), flush=True)
+            r = subprocess.run(st["cmd"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            for line in r.stdout.splitlines():
+                print("  " + line, flush=True)
+            if r.returncode != 0 and not st.get("may_fail"):
+                print(f"FAILED (exit {r.returncode}). Stopped here; nothing after this step was done.", flush=True)
+                return r.returncode
+        else:
+            {"fstab": _fstab, "folders": _folders}[st["internal"]](st)
+    st = os.statvfs(MOUNT)
+    print("RESULT " + json.dumps({"mount": MOUNT, "total": st.f_blocks * st.f_frsize, "free": st.f_bavail * st.f_frsize}), flush=True)
+    print("Done.", flush=True)
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(description="LAN Cache GOOEY disk helper")
+    ap.add_argument("command", choices=["scan", "plan", "apply", "version"])
+    ap.add_argument("action", nargs="?")
+    ap.add_argument("devices", nargs="*")
+    ap.add_argument("--fs", default="ext4")
+    ap.add_argument("--confirm", default="")
+    a = ap.parse_args()
+    try:
+        if a.command == "version":
+            print(VERSION)
+            return 0
+        if a.command == "scan":
+            print(json.dumps(scan()))
+            return 0
+        p = plan(a.action, a.devices, a.fs)
+        if a.command == "plan":
+            print(json.dumps(p))
+            return 0
+        if os.geteuid() != 0:
+            raise Refused("apply must run as root")
+        want = ",".join(sorted(p["erase"])) if p["erase"] else ",".join(a.devices)
+        if ",".join(sorted(x for x in a.confirm.split(",") if x)) != want:
+            raise Refused(f"--confirm must be exactly: {want}")
+        return apply(p)
+    except Refused as e:
+        print(json.dumps({"error": str(e)}) if a.command in ("scan", "plan") else f"Refused: {e}", flush=True)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
